@@ -1,10 +1,3 @@
-// ============================================================================
-// lib/services/kiosk_api_service.dart - VERSION REFACTORISÉE
-// ============================================================================
-// ✅ Cohérent avec les nouvelles routes kiosk (fridges.py)
-// ✅ Gestion complète du cycle de vie du kiosk
-// ============================================================================
-
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
@@ -12,25 +5,20 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class KioskApiService {
-  // ⚠️ CONFIGURATION : Remplacer par l'IP réelle de votre backend
-  static const String baseUrl = 'http://localhost:8000/api/v1';
+  static const String baseUrl = 'http://10.0.2.2:8000/api/v1';
   static const Duration timeout = Duration(seconds: 30);
 
-  // ============================================================================
-  // KIOSK LIFECYCLE
-  // ============================================================================
+  Future<Map<String, String>> _getKioskHeaders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final kioskId = prefs.getString('kiosk_id');
 
-  /// ✅ ÉTAPE 1 : Initialise un nouveau kiosk
-  ///
-  /// Appelé au démarrage du kiosk Samsung.
-  /// Le backend crée un frigo non-pairé avec un code 6 chiffres.
-  ///
-  /// Returns:
-  ///   {
-  ///     "kiosk_id": "uuid",
-  ///     "pairing_code": "123456",
-  ///     "expires_in_minutes": 5
-  ///   }
+    if (kioskId == null) {
+      throw Exception('Kiosk not initialized');
+    }
+
+    return {'Content-Type': 'application/json', 'X-Kiosk-ID': kioskId};
+  }
+
   Future<Map<String, dynamic>> initKiosk({String? deviceName}) async {
     try {
       final body = <String, dynamic>{};
@@ -46,11 +34,8 @@ class KioskApiService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-
-        // Sauvegarder le kiosk_id localement
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('kiosk_id', data['kiosk_id']);
-
         return data;
       } else {
         throw Exception('Échec d\'initialisation: ${response.body}');
@@ -62,9 +47,6 @@ class KioskApiService {
     }
   }
 
-  /// ✅ ÉTAPE 2 : Heartbeat (appelé toutes les 30s)
-  ///
-  /// Maintient la connexion active entre le kiosk et le backend.
   Future<void> sendHeartbeat(String kioskId) async {
     try {
       await http
@@ -74,24 +56,10 @@ class KioskApiService {
           )
           .timeout(const Duration(seconds: 10));
     } catch (e) {
-      // Ignorer les erreurs de heartbeat (non-bloquant)
+      // Ignorer les erreurs de heartbeat
     }
   }
 
-  /// ✅ ÉTAPE 3 : Vérifier si le kiosk a été pairé (polling toutes les 5s)
-  ///
-  /// Le kiosk poll cette route après génération du code.
-  /// Dès que le client mobile entre le code, cette route retourne is_paired=true.
-  ///
-  /// Returns:
-  ///   {
-  ///     "kiosk_id": "uuid",
-  ///     "is_paired": false,
-  ///     "fridge_id": null,
-  ///     "fridge_name": null,
-  ///     "last_heartbeat": "2025-11-30T12:00:00",
-  ///     "paired_at": null
-  ///   }
   Future<Map<String, dynamic>> checkKioskStatus(String kioskId) async {
     try {
       final response = await http
@@ -113,36 +81,31 @@ class KioskApiService {
     }
   }
 
-  /// Récupère le kiosk_id stocké localement
   Future<String?> getStoredKioskId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('kiosk_id');
   }
 
-  /// Efface le kiosk_id stocké (reset du kiosk)
   Future<void> clearKioskId() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('kiosk_id');
   }
 
-  // ============================================================================
-  // FRIDGE OPERATIONS (nécessitent fridgeId après pairing)
-  // ============================================================================
-
-  /// Récupère l'inventaire du frigo
-  ///
-  /// Note: Ne fonctionne qu'après le pairing (quand fridgeId est disponible)
   Future<List<dynamic>> getInventory(int fridgeId) async {
     try {
       final response = await http
           .get(
             Uri.parse('$baseUrl/fridges/$fridgeId/inventory'),
-            headers: {'Content-Type': 'application/json'},
+            headers: await _getKioskHeaders(),
           )
           .timeout(timeout);
 
       if (response.statusCode == 200) {
         return json.decode(response.body);
+      } else if (response.statusCode == 401) {
+        throw Exception('Kiosk non authentifié');
+      } else if (response.statusCode == 403) {
+        throw Exception('Accès refusé à ce frigo');
       } else {
         throw Exception('Erreur de chargement');
       }
@@ -151,14 +114,13 @@ class KioskApiService {
     }
   }
 
-  /// Récupère les alertes du frigo
   Future<List<dynamic>> getAlerts(int fridgeId, {String? status}) async {
     try {
       var url = '$baseUrl/fridges/$fridgeId/alerts';
       if (status != null) url += '?status=$status';
 
       final response = await http
-          .get(Uri.parse(url), headers: {'Content-Type': 'application/json'})
+          .get(Uri.parse(url), headers: await _getKioskHeaders())
           .timeout(timeout);
 
       if (response.statusCode == 200) {
@@ -171,18 +133,19 @@ class KioskApiService {
     }
   }
 
-  /// Analyse une image du frigo avec Vision AI
-  ///
-  /// Note: Nécessite le fridgeId (après pairing)
   Future<Map<String, dynamic>> analyzeImage(
     int fridgeId,
     File imageFile,
   ) async {
     try {
+      final kioskHeaders = await _getKioskHeaders();
+
       var request = http.MultipartRequest(
         'POST',
         Uri.parse('$baseUrl/fridges/$fridgeId/vision/analyze'),
       );
+
+      request.headers['X-Kiosk-ID'] = kioskHeaders['X-Kiosk-ID']!;
 
       request.files.add(
         await http.MultipartFile.fromPath('file', imageFile.path),
@@ -193,6 +156,10 @@ class KioskApiService {
 
       if (response.statusCode == 200) {
         return json.decode(response.body);
+      } else if (response.statusCode == 401) {
+        throw Exception('Kiosk non authentifié');
+      } else if (response.statusCode == 403) {
+        throw Exception('Accès refusé à ce frigo');
       } else {
         throw Exception('Échec d\'analyse: ${response.body}');
       }
@@ -201,11 +168,6 @@ class KioskApiService {
     }
   }
 
-  // ============================================================================
-  // UTILITY METHODS
-  // ============================================================================
-
-  /// Teste la connexion au backend
   Future<bool> testConnection() async {
     try {
       final response = await http
@@ -218,13 +180,12 @@ class KioskApiService {
     }
   }
 
-  /// Récupère les informations du frigo après pairing
   Future<Map<String, dynamic>> getFridgeInfo(int fridgeId) async {
     try {
       final response = await http
           .get(
             Uri.parse('$baseUrl/fridges/$fridgeId'),
-            headers: {'Content-Type': 'application/json'},
+            headers: await _getKioskHeaders(),
           )
           .timeout(timeout);
 
