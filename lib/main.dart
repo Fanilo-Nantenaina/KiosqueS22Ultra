@@ -99,40 +99,43 @@ class _KioskHomePageState extends State<KioskHomePage>
     });
 
     try {
-      final storedKioskId = await _api.getStoredKioskId();
+      final initData = await _api.initKiosk(
+        deviceName: 'Samsung Galaxy S22 Kiosk',
+      );
 
-      if (storedKioskId != null) {
-        // Vérifier le statut du kiosk existant
-        try {
-          final status = await _api.checkKioskStatus(storedKioskId);
+      setState(() {
+        _kioskId = initData['kiosk_id'];
+        _isPaired = initData['is_paired'] ?? false;
+        _fridgeId = initData['fridge_id'];
+        _fridgeName = initData['fridge_name'];
 
-          setState(() {
-            _kioskId = storedKioskId;
-            _isPaired = status['is_paired'] ?? false;
-            _fridgeId = status['fridge_id'];
-            _fridgeName = status['fridge_name'];
-            _isInitializing = false;
-          });
-
-          if (_isPaired) {
-            _startHeartbeat();
-          } else {
-            // Kiosk existe mais pas pairé, générer un nouveau code
-            await _initializeNewKiosk();
-          }
-        } catch (e) {
-          // Le kiosk stocké n'est plus valide, en créer un nouveau
-          await _api.clearKioskId();
-          await _initializeNewKiosk();
+        if (_isPaired) {
+          _pairingCode = null;
+        } else {
+          _pairingCode = initData['pairing_code'];
+          _remainingSeconds = (initData['expires_in_minutes'] as int) * 60;
         }
+
+        _isInitializing = false;
+      });
+
+      if (_isPaired) {
+        _startHeartbeat();
       } else {
-        // Pas de kiosk stocké, en créer un nouveau
-        await _initializeNewKiosk();
+        _startCodeExpiration();
+        _startHeartbeat();
+        _startStatusCheck();
       }
     } catch (e) {
       setState(() {
         _isInitializing = false;
         _errorMessage = 'Erreur d\'initialisation: ${e.toString()}';
+      });
+
+      Future.delayed(const Duration(seconds: 5), () {
+        if (mounted && !_isPaired) {
+          _checkExistingKiosk();
+        }
       });
     }
   }
@@ -167,7 +170,6 @@ class _KioskHomePageState extends State<KioskHomePage>
             'Impossible de se connecter au serveur.\n${e.toString()}';
       });
 
-      // Réessayer après 5 secondes
       Future.delayed(const Duration(seconds: 5), () {
         if (mounted && !_isPaired && _pairingCode == null) {
           _initializeNewKiosk();
@@ -235,7 +237,7 @@ class _KioskHomePageState extends State<KioskHomePage>
     _statusCheckTimer?.cancel();
     await _initializeNewKiosk();
   }
-/* 
+  /* 
   void _showError(String message) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

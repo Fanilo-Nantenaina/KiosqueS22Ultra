@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:kiosque_samsung_ultra/service/api.dart';
+import 'package:kiosque_samsung_ultra/service/theme.dart';
 
 class KioskInventoryPage extends StatefulWidget {
   final int fridgeId;
@@ -72,32 +73,38 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0A0E27),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('Inventaire du frigo'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadInventory,
-            tooltip: 'Actualiser',
+    return ListenableBuilder(
+      listenable: ThemeSwitcher(),
+      builder: (context, child) {
+        return Scaffold(
+          backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+          appBar: AppBar(
+            backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
+            foregroundColor: Theme.of(context).appBarTheme.foregroundColor,
+            elevation: 0,
+            title: const Text('Inventaire du frigo'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _loadInventory,
+                tooltip: 'Actualiser',
+              ),
+            ],
           ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _buildFilterChips(),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _inventory.isEmpty
-                ? _buildEmptyState()
-                : _buildInventoryList(),
+          body: Column(
+            children: [
+              _buildFilterChips(),
+              Expanded(
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _inventory.isEmpty
+                    ? _buildEmptyState()
+                    : _buildInventoryList(),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -118,6 +125,7 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
 
   Widget _buildFilterChip(String label, String value) {
     final isSelected = _filter == value;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return InkWell(
       onTap: () {
@@ -129,19 +137,27 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected
-              ? Colors.deepPurple.withOpacity(0.3)
-              : Colors.white.withOpacity(0.05),
+              ? (isDark
+                    ? Colors.blue.withOpacity(0.3)
+                    : Colors.blue.withOpacity(0.2))
+              : (isDark
+                    ? Colors.white.withOpacity(0.05)
+                    : Colors.grey.withOpacity(0.1)),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: isSelected
-                ? Colors.deepPurple
-                : Colors.white.withOpacity(0.1),
+                ? Colors.blue
+                : (isDark
+                      ? Colors.white.withOpacity(0.1)
+                      : Colors.grey.withOpacity(0.3)),
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.white : Colors.white54,
+            color: isSelected
+                ? (isDark ? Colors.white : Colors.blue)
+                : (isDark ? Colors.white54 : Colors.black54),
             fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
             fontSize: 13,
           ),
@@ -151,6 +167,8 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
   }
 
   Widget _buildEmptyState() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     String message = 'Aucun produit dans le frigo';
     IconData icon = Icons.inbox_outlined;
 
@@ -166,12 +184,20 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 100, color: Colors.white.withOpacity(0.2)),
+          Icon(
+            icon,
+            size: 100,
+            color: isDark
+                ? Colors.white.withOpacity(0.2)
+                : Colors.black.withOpacity(0.2),
+          ),
           const SizedBox(height: 16),
           Text(
             message,
             style: TextStyle(
-              color: Colors.white.withOpacity(0.5),
+              color: isDark
+                  ? Colors.white.withOpacity(0.5)
+                  : Colors.black.withOpacity(0.5),
               fontSize: 18,
             ),
             textAlign: TextAlign.center,
@@ -182,10 +208,12 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
   }
 
   Widget _buildInventoryList() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return RefreshIndicator(
       onRefresh: _loadInventory,
-      backgroundColor: const Color(0xFF1E293B),
-      color: Colors.white,
+      backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+      color: isDark ? Colors.white : Colors.blue,
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
         itemCount: _inventory.length,
@@ -197,6 +225,8 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
   }
 
   Widget _buildInventoryCard(Map<String, dynamic> item) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     final expiryDate = item['expiry_date'] != null
         ? DateTime.parse(item['expiry_date'])
         : null;
@@ -226,7 +256,7 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
     }
 
     final productName =
-        item['product']?['name'] ?? 'Produit #${item['product_id']}';
+        item['product_name'] ?? 'Produit #${item['product_id']}';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -257,7 +287,7 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.deepPurple.withOpacity(0.3),
+                        color: Colors.blue.withOpacity(0.3),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Icon(
@@ -273,8 +303,8 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
                         children: [
                           Text(
                             productName,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: isDark ? Colors.white : Colors.black87,
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
                             ),
@@ -282,16 +312,18 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
                           const SizedBox(height: 4),
                           Row(
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.inventory_2,
                                 size: 16,
-                                color: Colors.white54,
+                                color: isDark ? Colors.white54 : Colors.black54,
                               ),
                               const SizedBox(width: 6),
                               Text(
                                 '${item['quantity']} ${item['unit']}',
-                                style: const TextStyle(
-                                  color: Colors.white70,
+                                style: TextStyle(
+                                  color: isDark
+                                      ? Colors.white70
+                                      : Colors.black54,
                                   fontSize: 14,
                                 ),
                               ),
@@ -388,7 +420,7 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.deepPurple.withOpacity(0.3),
+                    color: Colors.blue.withOpacity(0.3),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Icon(
@@ -403,7 +435,7 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        item['product']?['name'] ??
+                        item['product_name'] ??
                             'Produit #${item['product_id']}',
                         style: const TextStyle(
                           fontSize: 20,
@@ -444,7 +476,7 @@ class _KioskInventoryPageState extends State<KioskInventoryPage> {
               child: ElevatedButton(
                 onPressed: () => Navigator.pop(context),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.deepPurple,
+                  backgroundColor: Colors.blue,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(

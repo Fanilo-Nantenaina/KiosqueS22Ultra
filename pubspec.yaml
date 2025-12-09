@@ -33,6 +33,7 @@ dependencies:
 
   http:
   dio:
+  device_info_plus:
   shared_preferences:
   provider:
   image_picker:

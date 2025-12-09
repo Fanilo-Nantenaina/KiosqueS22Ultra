@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:kiosque_samsung_ultra/service/api.dart';
+import 'package:kiosque_samsung_ultra/service/theme.dart';
 
 class KioskAlertsPage extends StatefulWidget {
   final int fridgeId;
@@ -53,28 +54,37 @@ class _KioskAlertsPageState extends State<KioskAlertsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0A0E27),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('Alertes'),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadAlerts),
-        ],
-      ),
-      body: Column(
-        children: [
-          _buildFilterChips(),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _alerts.isEmpty
-                ? _buildEmptyState()
-                : _buildAlertsList(),
+    return ListenableBuilder(
+      listenable: ThemeSwitcher(),
+      builder: (context, child) {
+        return Scaffold(
+          backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+          appBar: AppBar(
+            backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
+            foregroundColor: Theme.of(context).appBarTheme.foregroundColor,
+            elevation: 0,
+            title: const Text('Alertes'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _loadAlerts,
+              ),
+            ],
           ),
-        ],
-      ),
+          body: Column(
+            children: [
+              _buildFilterChips(),
+              Expanded(
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _alerts.isEmpty
+                    ? _buildEmptyState()
+                    : _buildAlertsList(),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -95,6 +105,7 @@ class _KioskAlertsPageState extends State<KioskAlertsPage> {
 
   Widget _buildFilterChip(String label, String value) {
     final isSelected = _filter == value;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return InkWell(
       onTap: () {
@@ -106,19 +117,27 @@ class _KioskAlertsPageState extends State<KioskAlertsPage> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected
-              ? Colors.deepPurple.withOpacity(0.3)
-              : Colors.white.withOpacity(0.05),
+              ? (isDark
+                    ? Colors.blue.withOpacity(0.3)
+                    : Colors.blue.withOpacity(0.2))
+              : (isDark
+                    ? Colors.white.withOpacity(0.05)
+                    : Colors.grey.withOpacity(0.1)),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: isSelected
-                ? Colors.deepPurple
-                : Colors.white.withOpacity(0.1),
+                ? Colors.blue
+                : (isDark
+                      ? Colors.white.withOpacity(0.1)
+                      : Colors.grey.withOpacity(0.3)),
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.white : Colors.white54,
+            color: isSelected
+                ? (isDark ? Colors.white : Colors.blue)
+                : (isDark ? Colors.white54 : Colors.black54),
             fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
             fontSize: 13,
           ),
@@ -128,6 +147,8 @@ class _KioskAlertsPageState extends State<KioskAlertsPage> {
   }
 
   Widget _buildEmptyState() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -135,13 +156,17 @@ class _KioskAlertsPageState extends State<KioskAlertsPage> {
           Icon(
             Icons.notifications_off_outlined,
             size: 100,
-            color: Colors.white.withOpacity(0.2),
+            color: isDark
+                ? Colors.white.withOpacity(0.2)
+                : Colors.black.withOpacity(0.2),
           ),
           const SizedBox(height: 16),
           Text(
             _filter == 'pending' ? 'Aucune alerte en attente' : 'Aucune alerte',
             style: TextStyle(
-              color: Colors.white.withOpacity(0.5),
+              color: isDark
+                  ? Colors.white.withOpacity(0.5)
+                  : Colors.black.withOpacity(0.5),
               fontSize: 18,
             ),
           ),
@@ -151,10 +176,12 @@ class _KioskAlertsPageState extends State<KioskAlertsPage> {
   }
 
   Widget _buildAlertsList() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return RefreshIndicator(
       onRefresh: _loadAlerts,
-      backgroundColor: const Color(0xFF1E293B),
-      color: Colors.white,
+      backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+      color: isDark ? Colors.white : Colors.blue,
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
         itemCount: _alerts.length,
@@ -214,8 +241,10 @@ class _KioskAlertsPageState extends State<KioskAlertsPage> {
                       const SizedBox(height: 8),
                       Text(
                         alert['message'] ?? '',
-                        style: const TextStyle(
-                          color: Colors.white70,
+                        style: TextStyle(
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white70
+                              : Colors.black54,
                           fontSize: 14,
                         ),
                         maxLines: 2,
@@ -334,7 +363,7 @@ class _KioskAlertsPageState extends State<KioskAlertsPage> {
               child: ElevatedButton(
                 onPressed: () => Navigator.pop(context),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.deepPurple,
+                  backgroundColor: Colors.blue,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(

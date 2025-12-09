@@ -2,11 +2,13 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:kiosque_samsung_ultra/service/device_id_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class KioskApiService {
   static const String baseUrl = 'http://10.0.2.2:8000/api/v1';
   static const Duration timeout = Duration(seconds: 30);
+  final DeviceIdService _deviceIdService = DeviceIdService();
 
   Future<Map<String, String>> _getKioskHeaders() async {
     final prefs = await SharedPreferences.getInstance();
@@ -21,8 +23,26 @@ class KioskApiService {
 
   Future<Map<String, dynamic>> initKiosk({String? deviceName}) async {
     try {
-      final body = <String, dynamic>{};
-      if (deviceName != null) body['device_name'] = deviceName;
+      final deviceId = await _deviceIdService.getDeviceId();
+
+      final existingKiosk = await _checkExistingDevice(deviceId);
+
+      if (existingKiosk != null) {
+        print('🔄 Kiosk restauré depuis device_id: $deviceId');
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('kiosk_id', existingKiosk['kiosk_id']);
+
+        return existingKiosk;
+      }
+
+      final body = <String, dynamic>{
+        'device_id': deviceId,
+      };
+
+      if (deviceName != null) {
+        body['device_name'] = deviceName;
+      }
 
       final response = await http
           .post(
@@ -34,8 +54,10 @@ class KioskApiService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('kiosk_id', data['kiosk_id']);
+
         return data;
       } else {
         throw Exception('Échec d\'initialisation: ${response.body}');
@@ -44,6 +66,28 @@ class KioskApiService {
       throw Exception('Délai d\'attente dépassé');
     } on SocketException {
       throw Exception('Pas de connexion réseau');
+    }
+  }
+
+  Future<Map<String, dynamic>?> _checkExistingDevice(String deviceId) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/fridges/kiosk/device/$deviceId'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(timeout);
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else if (response.statusCode == 404) {
+        return null;
+      } else {
+        throw Exception('Erreur ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Erreur lors de la vérification du device: $e');
+      return null;
     }
   }
 
