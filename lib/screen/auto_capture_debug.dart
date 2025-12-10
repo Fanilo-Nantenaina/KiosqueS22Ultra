@@ -63,7 +63,6 @@ class AutoCaptureDebugPanel extends StatelessWidget {
                       onPressed: () {
                         bluetoothService.printStats();
                         captureService.printStats();
-                        orchestrator.printStats();
                       },
                       icon: const Icon(Icons.print, size: 18),
                       label: const Text('Print Stats'),

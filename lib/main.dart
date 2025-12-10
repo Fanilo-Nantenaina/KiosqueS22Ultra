@@ -29,27 +29,33 @@ void main() async {
   await bluetoothService.init();
   await captureService.init();
 
-  // Créer l'orchestrateur avec injection des dépendances
-  final orchestrator = AutoCaptureOrchestrator(
-    bluetoothService: bluetoothService,
-    captureService: captureService,
-    api: api,
-  );
-
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: bluetoothService),
         ChangeNotifierProvider.value(value: captureService),
-        ChangeNotifierProvider.value(value: orchestrator),
+        // L'orchestrateur sera créé plus tard avec le context
       ],
-      child: const SmartFridgeKioskApp(),
+      child: SmartFridgeKioskApp(
+        bluetoothService: bluetoothService,
+        captureService: captureService,
+        api: api,
+      ),
     ),
   );
 }
 
 class SmartFridgeKioskApp extends StatelessWidget {
-  const SmartFridgeKioskApp({super.key});
+  final BluetoothFridgeService bluetoothService;
+  final AutoCaptureService captureService;
+  final KioskApiService api;
+
+  const SmartFridgeKioskApp({
+    super.key,
+    required this.bluetoothService,
+    required this.captureService,
+    required this.api,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -62,7 +68,11 @@ class SmartFridgeKioskApp extends StatelessWidget {
           theme: ThemeSwitcher.lightTheme,
           darkTheme: ThemeSwitcher.darkTheme,
           themeMode: ThemeSwitcher().themeMode,
-          home: const KioskHomePage(),
+          home: KioskHomePage(
+            bluetoothService: bluetoothService,
+            captureService: captureService,
+            api: api,
+          ),
         );
       },
     );
@@ -70,7 +80,16 @@ class SmartFridgeKioskApp extends StatelessWidget {
 }
 
 class KioskHomePage extends StatefulWidget {
-  const KioskHomePage({super.key});
+  final BluetoothFridgeService bluetoothService;
+  final AutoCaptureService captureService;
+  final KioskApiService api;
+
+  const KioskHomePage({
+    super.key,
+    required this.bluetoothService,
+    required this.captureService,
+    required this.api,
+  });
 
   @override
   State<KioskHomePage> createState() => _KioskHomePageState();
@@ -95,6 +114,8 @@ class _KioskHomePageState extends State<KioskHomePage>
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+
+  AutoCaptureOrchestrator? _orchestrator;
 
   @override
   void initState() {
@@ -206,11 +227,7 @@ class _KioskHomePageState extends State<KioskHomePage>
 
         // Initialiser auto-capture après pairing
         if (_fridgeId != null && mounted) {
-          final orchestrator = context.read<AutoCaptureOrchestrator>();
-          await orchestrator.init(_fridgeId!);
-          debugPrint(
-            '🎯 Auto-capture orchestrator initialisé pour frigo #$_fridgeId',
-          );
+          _initializeOrchestrator();
         }
       } else {
         _startCodeExpiration();
@@ -232,6 +249,24 @@ class _KioskHomePageState extends State<KioskHomePage>
         }
       });
     }
+  }
+
+  /// 🆕 Initialiser l'orchestrateur avec le context
+  void _initializeOrchestrator() {
+    if (_fridgeId == null || _orchestrator != null) return;
+
+    _orchestrator = AutoCaptureOrchestrator(
+      bluetoothService: widget.bluetoothService,
+      captureService: widget.captureService,
+      api: widget.api,
+      context: context, // 🎯 Passer le context
+    );
+
+    _orchestrator!.init(_fridgeId!);
+
+    debugPrint(
+      '🎯 Auto-capture orchestrator initialisé pour frigo #$_fridgeId',
+    );
   }
 
   Future<void> _regenerateCode() async {
@@ -327,11 +362,7 @@ class _KioskHomePageState extends State<KioskHomePage>
 
             // Initialiser auto-capture après pairing
             if (_fridgeId != null && mounted) {
-              final orchestrator = context.read<AutoCaptureOrchestrator>();
-              await orchestrator.init(_fridgeId!);
-              debugPrint(
-                '🎯 Auto-capture orchestrator initialisé pour frigo #$_fridgeId',
-              );
+              _initializeOrchestrator();
             }
           }
         } catch (e) {
@@ -736,7 +767,6 @@ class _KioskHomePageState extends State<KioskHomePage>
               ),
             ),
             const SizedBox(height: 32),
-            _buildInstructions(),
           ],
         ),
       ),
@@ -744,12 +774,17 @@ class _KioskHomePageState extends State<KioskHomePage>
   }
 
   Widget _buildPairedView() {
+    if (_orchestrator == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return Column(
       children: [
         // Indicateur auto-capture
-        Consumer<AutoCaptureOrchestrator>(
-          builder: (context, orchestrator, _) {
-            return AutoCaptureIndicator(orchestrator: orchestrator);
+        ListenableBuilder(
+          listenable: _orchestrator!,
+          builder: (context, _) {
+            return AutoCaptureIndicator(orchestrator: _orchestrator!);
           },
         ),
 
@@ -780,306 +815,11 @@ class _KioskHomePageState extends State<KioskHomePage>
                   _fridgeName ?? 'Mon Frigo',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'ID: $_fridgeId',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 48),
-                _buildModeSwitcher(),
-                const SizedBox(height: 24),
-                _buildQuickActions(),
               ],
             ),
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildModeSwitcher() {
-    return ListenableBuilder(
-      listenable: ScanModeService(),
-      builder: (context, _) {
-        final modeService = ScanModeService();
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-
-        return Container(
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isDark ? const Color(0xFF475569) : const Color(0xFFE2E8F0),
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildModeButton(
-                label: 'Entrée',
-                icon: Icons.add_circle_outline,
-                isActive: modeService.isEntryMode,
-                color: const Color(0xFF10B981),
-                onTap: () => modeService.setMode(ScanMode.entry),
-              ),
-              const SizedBox(width: 4),
-              _buildModeButton(
-                label: 'Sortie',
-                icon: Icons.remove_circle_outline,
-                isActive: modeService.isExitMode,
-                color: const Color(0xFFEF4444),
-                onTap: () => modeService.setMode(ScanMode.exit),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildModeButton({
-    required String label,
-    required IconData icon,
-    required bool isActive,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          decoration: BoxDecoration(
-            gradient: isActive
-                ? LinearGradient(colors: [color, color.withOpacity(0.8)])
-                : null,
-            color: isActive ? null : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                color: isActive
-                    ? Colors.white
-                    : (isDark ? Colors.white54 : Colors.black54),
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: TextStyle(
-                  color: isActive
-                      ? Colors.white
-                      : (isDark ? Colors.white54 : Colors.black54),
-                  fontSize: 16,
-                  fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildQuickActions() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(
-        children: [
-          _buildActionCard(
-            'Configuration Auto-Capture',
-            Icons.settings_bluetooth,
-            const Color(0xFF8B5CF6),
-            () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const BluetoothSetupPage(),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          _buildActionCard(
-            'Scanner le frigo',
-            Icons.camera_alt,
-            const Color(0xFF3B82F6),
-            () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => VisionScanPage(fridgeId: _fridgeId!),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          _buildActionCard(
-            'Voir l\'inventaire',
-            Icons.inventory_2,
-            const Color(0xFF10B981),
-            () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) =>
-                      KioskInventoryPage(fridgeId: _fridgeId!),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          _buildActionCard(
-            'Consulter les alertes',
-            Icons.notifications,
-            const Color(0xFFF59E0B),
-            () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => KioskAlertsPage(fridgeId: _fridgeId!),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActionCard(
-    String title,
-    IconData icon,
-    Color color,
-    VoidCallback onTap,
-  ) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Ink(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Theme.of(context).colorScheme.outline),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: color, size: 24),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Text(
-                  title,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              Icon(
-                Icons.arrow_forward_ios,
-                size: 16,
-                color: Theme.of(context).iconTheme.color?.withOpacity(0.5),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInstructions() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Theme.of(context).colorScheme.outline),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.info_outline,
-                  color: Theme.of(context).colorScheme.primary,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Comment connecter',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurface,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _buildInstructionStep('1', 'Ouvrez l\'application mobile'),
-          _buildInstructionStep('2', 'Touchez "Connecter un frigo"'),
-          _buildInstructionStep('3', 'Entrez le code affiché ci-dessus'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInstructionStep(String number, String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: Text(
-                number,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.primary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(text, style: Theme.of(context).textTheme.bodyMedium),
-          ),
-        ],
-      ),
     );
   }
 }
