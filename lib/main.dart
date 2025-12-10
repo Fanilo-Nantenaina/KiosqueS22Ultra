@@ -767,6 +767,7 @@ class _KioskHomePageState extends State<KioskHomePage>
               ),
             ),
             const SizedBox(height: 32),
+            _buildInstructions(),
           ],
         ),
       ),
