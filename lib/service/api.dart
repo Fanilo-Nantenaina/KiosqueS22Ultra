@@ -4,9 +4,10 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:kiosque_samsung_ultra/service/device_id_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 
 class KioskApiService {
-  static const String baseUrl = 'http://10.0.2.2:8000/api/v1';
+  static const String baseUrl = 'http://localhost:8000/api/v1';
   static const Duration timeout = Duration(seconds: 30);
   final DeviceIdService _deviceIdService = DeviceIdService();
 
@@ -21,28 +22,54 @@ class KioskApiService {
     return {'Content-Type': 'application/json', 'X-Kiosk-ID': kioskId};
   }
 
-  Future<Map<String, dynamic>> initKiosk({String? deviceName}) async {
+  /// Initialise ou récupère un kiosk
+  /// Si forceNew = true, génère toujours un nouveau kiosk
+  Future<Map<String, dynamic>> initKiosk({
+    String? deviceName,
+    bool forceNew = false,
+  }) async {
     try {
       final deviceId = await _deviceIdService.getDeviceId();
+      debugPrint('📱 Device ID: $deviceId');
 
-      final existingKiosk = await _checkExistingDevice(deviceId);
+      // Si forceNew = false, on essaie de récupérer un kiosk existant
+      if (!forceNew) {
+        final existingKiosk = await _checkExistingDevice(deviceId);
 
-      if (existingKiosk != null) {
-        print('🔄 Kiosk restauré depuis device_id: $deviceId');
+        if (existingKiosk != null) {
+          debugPrint('🔄 Kiosk existant trouvé: ${existingKiosk['kiosk_id']}');
 
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('kiosk_id', existingKiosk['kiosk_id']);
+          // Vérifier si le code est expiré
+          final expiresIn = existingKiosk['expires_in_minutes'];
+          final isPaired = existingKiosk['is_paired'] == true;
 
-        return existingKiosk;
+          if (isPaired || (expiresIn != null && expiresIn > 0)) {
+            debugPrint('✅ Kiosk valide restauré');
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('kiosk_id', existingKiosk['kiosk_id']);
+            return existingKiosk;
+          } else {
+            debugPrint('⚠️ Code expiré, création d\'un nouveau kiosk');
+            // Le code est expiré, on force la création d'un nouveau
+            forceNew = true;
+          }
+        }
       }
 
+      // Création d'un nouveau kiosk
+      debugPrint('🆕 Création d\'un nouveau kiosk...');
+
       final body = <String, dynamic>{
-        'device_id': deviceId,
+        'device_id': forceNew
+            ? '${deviceId}_${DateTime.now().millisecondsSinceEpoch}'
+            : deviceId,
       };
 
       if (deviceName != null) {
         body['device_name'] = deviceName;
       }
+
+      debugPrint('📤 Body envoyé: $body');
 
       final response = await http
           .post(
@@ -52,11 +79,17 @@ class KioskApiService {
           )
           .timeout(timeout);
 
+      debugPrint('📥 Response status: ${response.statusCode}');
+      debugPrint('📥 Response body: ${response.body}');
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('kiosk_id', data['kiosk_id']);
+
+        debugPrint('✅ Nouveau kiosk créé: ${data['kiosk_id']}');
+        debugPrint('🔑 Code: ${data['pairing_code']}');
 
         return data;
       } else {
@@ -66,6 +99,34 @@ class KioskApiService {
       throw Exception('Délai d\'attente dépassé');
     } on SocketException {
       throw Exception('Pas de connexion réseau');
+    }
+  }
+
+  /// Génère un nouveau code pour un kiosk existant
+  Future<Map<String, dynamic>> regeneratePairingCode(String kioskId) async {
+    try {
+      debugPrint('🔄 Régénération du code pour kiosk: $kioskId');
+
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/fridges/kiosk/$kioskId/regenerate-code'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(timeout);
+
+      debugPrint('📥 Regenerate response: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        debugPrint('✅ Nouveau code: ${data['pairing_code']}');
+        return data;
+      } else if (response.statusCode == 404) {
+        throw Exception('Kiosk non trouvé');
+      } else {
+        throw Exception('Erreur ${response.statusCode}: ${response.body}');
+      }
+    } on TimeoutException {
+      throw Exception('Délai d\'attente dépassé');
     }
   }
 
@@ -86,7 +147,7 @@ class KioskApiService {
         throw Exception('Erreur ${response.statusCode}');
       }
     } catch (e) {
-      print('Erreur lors de la vérification du device: $e');
+      debugPrint('⚠️ Erreur lors de la vérification du device: $e');
       return null;
     }
   }
@@ -133,6 +194,7 @@ class KioskApiService {
   Future<void> clearKioskId() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('kiosk_id');
+    debugPrint('🗑️ Kiosk ID supprimé du stockage local');
   }
 
   Future<List<dynamic>> getInventory(int fridgeId) async {
@@ -237,6 +299,59 @@ class KioskApiService {
         return json.decode(response.body);
       } else {
         throw Exception('Frigo non trouvé');
+      }
+    } on TimeoutException {
+      throw Exception('Délai d\'attente dépassé');
+    }
+  }
+
+  Future<Map<String, dynamic>> analyzeImageForConsumption(
+    int fridgeId,
+    File imageFile,
+  ) async {
+    try {
+      final kioskHeaders = await _getKioskHeaders();
+
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$baseUrl/fridges/$fridgeId/vision/analyze-consume'),
+      );
+
+      request.headers['X-Kiosk-ID'] = kioskHeaders['X-Kiosk-ID']!;
+      request.files.add(
+        await http.MultipartFile.fromPath('file', imageFile.path),
+      );
+
+      final streamedResponse = await request.send().timeout(timeout);
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        throw Exception('Échec d\'analyse: ${response.body}');
+      }
+    } on TimeoutException {
+      throw Exception('Délai d\'attente dépassé');
+    }
+  }
+
+  Future<Map<String, dynamic>> consumeBatch(
+    int fridgeId,
+    List<Map<String, dynamic>> items,
+  ) async {
+    try {
+      final response = await http
+          .patch(
+            Uri.parse('$baseUrl/fridges/$fridgeId/inventory/consume-batch'),
+            headers: await _getKioskHeaders(),
+            body: json.encode({'items': items}),
+          )
+          .timeout(timeout);
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        throw Exception('Erreur de consommation');
       }
     } on TimeoutException {
       throw Exception('Délai d\'attente dépassé');

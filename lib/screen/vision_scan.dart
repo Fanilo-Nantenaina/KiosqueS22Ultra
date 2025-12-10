@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:kiosque_samsung_ultra/screen/consumption_review.dart';
 import 'dart:io';
 import 'package:kiosque_samsung_ultra/service/api.dart';
+import 'package:kiosque_samsung_ultra/service/scan_mode_service.dart';
 
 class VisionScanPage extends StatefulWidget {
   final int fridgeId;
@@ -15,6 +17,7 @@ class VisionScanPage extends StatefulWidget {
 class _VisionScanPageState extends State<VisionScanPage> {
   final ImagePicker _picker = ImagePicker();
   final KioskApiService _api = KioskApiService();
+  ScanMode get _currentMode => ScanModeService().currentMode;
 
   File? _imageFile;
   bool _isAnalyzing = false;
@@ -65,17 +68,46 @@ class _VisionScanPageState extends State<VisionScanPage> {
     setState(() => _isAnalyzing = true);
 
     try {
-      final result = await _api.analyzeImage(widget.fridgeId, _imageFile!);
+      if (_currentMode == ScanMode.entry) {
+        final result = await _api.analyzeImage(widget.fridgeId, _imageFile!);
 
-      setState(() {
-        _analysisResult = result;
-        _isAnalyzing = false;
-      });
+        setState(() {
+          _analysisResult = result;
+          _isAnalyzing = false;
+        });
 
-      _showSuccess('Analyse terminée !');
+        _showSuccess('Produits ajoutés !');
+      } else {
+        final result = await _api.analyzeImageForConsumption(
+          widget.fridgeId,
+          _imageFile!,
+        );
+
+        setState(() => _isAnalyzing = false);
+
+        if (mounted) {
+          final confirmed = await Navigator.push<bool>(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ConsumptionReviewPage(
+                fridgeId: widget.fridgeId,
+                analysisResult: result,
+              ),
+            ),
+          );
+
+          if (confirmed == true) {
+            _showSuccess('Produits retirés !');
+            setState(() {
+              _imageFile = null;
+              _analysisResult = null;
+            });
+          }
+        }
+      }
     } catch (e) {
       setState(() => _isAnalyzing = false);
-      _showError('Erreur d\'analyse: $e');
+      _showError('Erreur: $e');
     }
   }
 
@@ -103,34 +135,64 @@ class _VisionScanPageState extends State<VisionScanPage> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: AppBar(
-        title: const Text('Scanner le frigo'),
-        backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
-        foregroundColor: Theme.of(context).appBarTheme.foregroundColor,
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (_imageFile == null)
-                    _buildChoiceButtons(isDark)
-                  else
-                    _buildImagePreview(isDark),
-                  const SizedBox(height: 24),
-                  if (_isAnalyzing) _buildAnalyzing(isDark),
-                  if (_analysisResult != null) _buildResults(isDark),
-                ],
-              ),
+    return ListenableBuilder(
+      listenable: ScanModeService(),
+      builder: (context, _) {
+        return Scaffold(
+          appBar: AppBar(
+            title: Row(
+              children: [
+                Text('Scanner - '),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color:
+                        (_currentMode == ScanMode.entry
+                                ? const Color(0xFF10B981)
+                                : const Color(0xFFEF4444))
+                            .withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    ScanModeService().modeLabel,
+                    style: TextStyle(
+                      color: _currentMode == ScanMode.entry
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFFEF4444),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+          body: Column(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_imageFile == null)
+                        _buildChoiceButtons(isDark)
+                      else
+                        _buildImagePreview(isDark),
+                      const SizedBox(height: 24),
+                      if (_isAnalyzing) _buildAnalyzing(isDark),
+                      if (_analysisResult != null) _buildResults(isDark),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

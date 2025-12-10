@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:kiosque_samsung_ultra/service/scan_mode_service.dart';
 import 'dart:async';
 import 'service/api.dart';
 import 'package:kiosque_samsung_ultra/screen/alerts.dart';
@@ -70,6 +71,7 @@ class _KioskHomePageState extends State<KioskHomePage>
     super.initState();
     _initializePulseAnimation();
     _checkExistingKiosk();
+    ScanModeService().init();
   }
 
   @override
@@ -92,6 +94,68 @@ class _KioskHomePageState extends State<KioskHomePage>
     );
   }
 
+  // ✅ Méthode utilitaire pour extraire les données de manière sécurisée
+  int _safeGetExpirationSeconds(Map<String, dynamic> data) {
+    try {
+      final expiresIn = data['expires_in_minutes'];
+
+      if (expiresIn == null) {
+        debugPrint(
+          '⚠️ expires_in_minutes est null, utilisation de 5 min par défaut',
+        );
+        return 300; // 5 minutes par défaut
+      }
+
+      if (expiresIn is int) {
+        return expiresIn * 60;
+      }
+
+      if (expiresIn is double) {
+        return (expiresIn * 60).toInt();
+      }
+
+      if (expiresIn is String) {
+        final parsed = int.tryParse(expiresIn);
+        if (parsed != null) {
+          return parsed * 60;
+        }
+      }
+
+      debugPrint(
+        '⚠️ Type inattendu pour expires_in_minutes: ${expiresIn.runtimeType}',
+      );
+      return 300; // 5 minutes par défaut
+    } catch (e) {
+      debugPrint('❌ Erreur lors de l\'extraction de expires_in_minutes: $e');
+      return 300;
+    }
+  }
+
+  // ✅ Méthode pour appliquer les données de l'API de manière sécurisée
+  void _applyInitData(Map<String, dynamic> initData, {bool isPaired = false}) {
+    setState(() {
+      _kioskId = initData['kiosk_id'] as String?;
+      _isPaired = isPaired || (initData['is_paired'] as bool? ?? false);
+      _fridgeId = initData['fridge_id'] as int?;
+      _fridgeName = initData['fridge_name'] as String?;
+
+      if (_isPaired) {
+        _pairingCode = null;
+        _remainingSeconds = 0;
+      } else {
+        _pairingCode = initData['pairing_code'] as String?;
+        _remainingSeconds = _safeGetExpirationSeconds(initData);
+      }
+
+      _isInitializing = false;
+      _errorMessage = null;
+    });
+
+    debugPrint(
+      '📱 Kiosk initialisé: ID=$_kioskId, Paired=$_isPaired, Code=$_pairingCode',
+    );
+  }
+
   Future<void> _checkExistingKiosk() async {
     setState(() {
       _isInitializing = true;
@@ -99,25 +163,15 @@ class _KioskHomePageState extends State<KioskHomePage>
     });
 
     try {
+      debugPrint('🔍 Vérification d\'un kiosk existant...');
+
       final initData = await _api.initKiosk(
         deviceName: 'Samsung Galaxy S22 Kiosk',
       );
 
-      setState(() {
-        _kioskId = initData['kiosk_id'];
-        _isPaired = initData['is_paired'] ?? false;
-        _fridgeId = initData['fridge_id'];
-        _fridgeName = initData['fridge_name'];
+      debugPrint('✅ Réponse API reçue: $initData');
 
-        if (_isPaired) {
-          _pairingCode = null;
-        } else {
-          _pairingCode = initData['pairing_code'];
-          _remainingSeconds = (initData['expires_in_minutes'] as int) * 60;
-        }
-
-        _isInitializing = false;
-      });
+      _applyInitData(initData);
 
       if (_isPaired) {
         _startHeartbeat();
@@ -126,7 +180,10 @@ class _KioskHomePageState extends State<KioskHomePage>
         _startHeartbeat();
         _startStatusCheck();
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('❌ Erreur lors de l\'initialisation: $e');
+      debugPrint('Stack trace: $stackTrace');
+
       setState(() {
         _isInitializing = false;
         _errorMessage = 'Erreur d\'initialisation: ${e.toString()}';
@@ -140,39 +197,64 @@ class _KioskHomePageState extends State<KioskHomePage>
     }
   }
 
-  Future<void> _initializeNewKiosk() async {
+  Future<void> _regenerateCode() async {
+    debugPrint('🔄 Regénération du code demandée...');
+
+    // Annuler tous les timers
+    _codeExpirationTimer?.cancel();
+    _statusCheckTimer?.cancel();
+    _heartbeatTimer?.cancel();
+
     setState(() {
       _isInitializing = true;
       _errorMessage = null;
       _pairingCode = null;
+      _remainingSeconds = 0;
     });
 
     try {
+      // ✅ ÉTAPE 1 : Supprimer l'ancien kiosk pour forcer un nouveau
+      if (_kioskId != null) {
+        debugPrint('🗑️ Suppression de l\'ancien kiosk: $_kioskId');
+        try {
+          await _api.clearKioskId();
+        } catch (e) {
+          debugPrint('⚠️ Erreur suppression (ignorée): $e');
+        }
+      }
+
+      // ✅ ÉTAPE 2 : Forcer la création d'un nouveau kiosk
+      debugPrint('📡 Création d\'un nouveau kiosk...');
+
       final initData = await _api.initKiosk(
         deviceName: 'Samsung Galaxy S22 Kiosk',
+        forceNew: true, // Paramètre pour forcer un nouveau kiosk
       );
 
-      setState(() {
-        _kioskId = initData['kiosk_id'];
-        _pairingCode = initData['pairing_code'];
-        _remainingSeconds = (initData['expires_in_minutes'] as int) * 60;
-        _isInitializing = false;
-        _isPaired = false;
-      });
+      debugPrint('✅ Nouveau code reçu: $initData');
+
+      _applyInitData(initData, isPaired: false);
 
       _startCodeExpiration();
       _startHeartbeat();
       _startStatusCheck();
-    } catch (e) {
+
+      if (mounted) {
+        _showSuccess('Nouveau code généré avec succès');
+      }
+    } catch (e, stackTrace) {
+      debugPrint('❌ Erreur lors de la régénération: $e');
+      debugPrint('Stack trace: $stackTrace');
+
       setState(() {
         _isInitializing = false;
         _errorMessage =
-            'Impossible de se connecter au serveur.\n${e.toString()}';
+            'Impossible de générer un nouveau code.\n${e.toString()}';
       });
 
       Future.delayed(const Duration(seconds: 5), () {
         if (mounted && !_isPaired && _pairingCode == null) {
-          _initializeNewKiosk();
+          _regenerateCode();
         }
       });
     }
@@ -199,8 +281,8 @@ class _KioskHomePageState extends State<KioskHomePage>
           if (status['is_paired'] == true) {
             setState(() {
               _isPaired = true;
-              _fridgeId = status['fridge_id'];
-              _fridgeName = status['fridge_name'];
+              _fridgeId = status['fridge_id'] as int?;
+              _fridgeName = status['fridge_name'] as String?;
               _pairingCode = null;
               _errorMessage = null;
             });
@@ -211,6 +293,7 @@ class _KioskHomePageState extends State<KioskHomePage>
           }
         } catch (e) {
           // Ignorer les erreurs de polling
+          debugPrint('⚠️ Erreur polling (ignorée): $e');
         }
       }
     });
@@ -218,6 +301,12 @@ class _KioskHomePageState extends State<KioskHomePage>
 
   void _startCodeExpiration() {
     _codeExpirationTimer?.cancel();
+
+    if (_remainingSeconds <= 0) {
+      debugPrint('⚠️ Aucun temps restant, timer non démarré');
+      return;
+    }
+
     _codeExpirationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() {
@@ -226,29 +315,12 @@ class _KioskHomePageState extends State<KioskHomePage>
           } else {
             _pairingCode = null;
             timer.cancel();
+            debugPrint('⏰ Code expiré');
           }
         });
       }
     });
   }
-
-  Future<void> _regenerateCode() async {
-    _codeExpirationTimer?.cancel();
-    _statusCheckTimer?.cancel();
-    await _initializeNewKiosk();
-  }
-  /* 
-  void _showError(String message) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.red[700],
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  } */
 
   void _showSuccess(String message) {
     if (mounted) {
@@ -640,8 +712,103 @@ class _KioskHomePageState extends State<KioskHomePage>
           const SizedBox(height: 4),
           Text('ID: $_fridgeId', style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 48),
+          _buildModeSwitcher(),
+          const SizedBox(height: 24),
           _buildQuickActions(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildModeSwitcher() {
+    return ListenableBuilder(
+      listenable: ScanModeService(),
+      builder: (context, _) {
+        final modeService = ScanModeService();
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+
+        return Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isDark ? const Color(0xFF475569) : const Color(0xFFE2E8F0),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildModeButton(
+                label: 'Entrée',
+                icon: Icons.add_circle_outline,
+                isActive: modeService.isEntryMode,
+                color: const Color(0xFF10B981),
+                onTap: () => modeService.setMode(ScanMode.entry),
+              ),
+              const SizedBox(width: 4),
+              _buildModeButton(
+                label: 'Sortie',
+                icon: Icons.remove_circle_outline,
+                isActive: modeService.isExitMode,
+                color: const Color(0xFFEF4444),
+                onTap: () => modeService.setMode(ScanMode.exit),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildModeButton({
+    required String label,
+    required IconData icon,
+    required bool isActive,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          decoration: BoxDecoration(
+            gradient: isActive
+                ? LinearGradient(colors: [color, color.withOpacity(0.8)])
+                : null,
+            color: isActive ? null : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                color: isActive
+                    ? Colors.white
+                    : (isDark ? Colors.white54 : Colors.black54),
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isActive
+                      ? Colors.white
+                      : (isDark ? Colors.white54 : Colors.black54),
+                  fontSize: 16,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
