@@ -5,19 +5,18 @@ import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// ═══════════════════════════════════════════════════════════
-/// Service de gestion Bluetooth avec l'Arduino
-/// Gère la connexion, les événements, et la communication
+/// Service Bluetooth avec debug amélioré
 /// ═══════════════════════════════════════════════════════════
 
 enum FridgeEvent {
-  ready, // Arduino prêt
-  opening, // Détection ouverture
-  open, // Ouverture confirmée → START CAPTURE
-  stillOpen, // Heartbeat pendant ouverture
-  closing, // Détection fermeture
-  closed, // Fermeture confirmée → STOP & UPLOAD
-  config, // Configuration reçue
-  heartbeat, // Heartbeat normal
+  ready,
+  opening,
+  open,
+  stillOpen,
+  closing,
+  closed,
+  config,
+  heartbeat,
 }
 
 class FridgeEventData {
@@ -35,7 +34,7 @@ class BluetoothFridgeService extends ChangeNotifier {
   factory BluetoothFridgeService() => _instance;
   BluetoothFridgeService._internal();
 
-  // ═══════════ État de la connexion ═══════════
+  // ═══════════ État ═══════════
   FlutterBluetoothSerial _bluetooth = FlutterBluetoothSerial.instance;
   BluetoothConnection? _connection;
   BluetoothDevice? _connectedDevice;
@@ -56,16 +55,18 @@ class BluetoothFridgeService extends ChangeNotifier {
   int _referenceDistance = 0;
   DateTime? _sessionStartTime;
   int _sessionPhotoCount = 0;
-
-  // ═══════════ Statistiques ═══════════
   DateTime? _lastHeartbeat;
   int _totalSessions = 0;
   int _totalPhotos = 0;
 
-  // Reconnexion automatique
+  // Reconnexion
   Timer? _reconnectionTimer;
   int _reconnectionAttempts = 0;
   static const int MAX_RECONNECTION_ATTEMPTS = 5;
+
+  // 🆕 Compteur de messages reçus pour vérifier la connexion
+  int _messagesReceived = 0;
+  DateTime? _lastMessageTime;
 
   // ═══════════ GETTERS ═══════════
   bool get isConnected => _isConnected;
@@ -75,28 +76,28 @@ class BluetoothFridgeService extends ChangeNotifier {
   int get referenceDistance => _referenceDistance;
   bool get isSessionActive => _sessionStartTime != null;
   int get sessionPhotoCount => _sessionPhotoCount;
+  int get messagesReceived => _messagesReceived;
+  DateTime? get lastMessageTime => _lastMessageTime;
+
   Duration? get sessionDuration => _sessionStartTime != null
       ? DateTime.now().difference(_sessionStartTime!)
       : null;
 
   // ═══════════════════════════════════════════════════════
-  // INITIALISATION
+  // INIT
   // ═══════════════════════════════════════════════════════
 
   Future<void> init() async {
     debugPrint('🔷 BluetoothFridgeService: Initialisation');
 
-    // Vérifier si Bluetooth activé
     bool? isEnabled = await _bluetooth.isEnabled;
     if (isEnabled == false) {
       debugPrint('⚠️  Bluetooth désactivé');
       return;
     }
 
-    // Charger le dernier device connecté
     await _loadSavedDevice();
 
-    // Tenter reconnexion automatique
     if (_autoReconnect && _connectedDevice != null) {
       await connectToDevice(_connectedDevice!);
     }
@@ -123,28 +124,57 @@ class BluetoothFridgeService extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════
-  // SCAN & PAIRING
+  // 🆕 DÉCONNEXION FORCÉE ET COMPLÈTE
   // ═══════════════════════════════════════════════════════
 
-  Future<List<BluetoothDevice>> getAvailableDevices() async {
-    try {
-      // Appareils déjà appairés
-      final bondedDevices = await _bluetooth.getBondedDevices();
+  Future<void> forceDisconnect() async {
+    debugPrint('🔌 ═══════════════════════════════════');
+    debugPrint('🔌 DÉCONNEXION FORCÉE');
+    debugPrint('🔌 ═══════════════════════════════════');
 
-      debugPrint('📱 ${bondedDevices.length} devices appairés');
-      for (var device in bondedDevices) {
-        debugPrint('  - ${device.name} (${device.address})');
-      }
+    // Annuler tous les timers
+    _reconnectionTimer?.cancel();
+    _reconnectionTimer = null;
 
-      return bondedDevices;
-    } catch (e) {
-      debugPrint('❌ Erreur scan: $e');
-      return [];
+    // Fermer le stream de données
+    if (_dataSubscription != null) {
+      debugPrint('📡 Fermeture du stream de données...');
+      await _dataSubscription?.cancel();
+      _dataSubscription = null;
     }
+
+    // Fermer la connexion Bluetooth
+    if (_connection != null) {
+      debugPrint('📡 Fermeture de la connexion Bluetooth...');
+      try {
+        await _connection?.close();
+        await _connection?.finish();
+      } catch (e) {
+        debugPrint('⚠️  Erreur lors de la fermeture: $e');
+      }
+      _connection = null;
+    }
+
+    // Reset de tous les états
+    _isConnected = false;
+    _isConnecting = false;
+    _connectedDevice = null;
+    _currentState = 'IDLE';
+    _messagesReceived = 0;
+    _lastMessageTime = null;
+    _lastHeartbeat = null;
+    _sessionStartTime = null;
+    _sessionPhotoCount = 0;
+
+    debugPrint('✅ Déconnexion complète');
+    notifyListeners();
+
+    // Petit délai pour s'assurer que tout est libéré
+    await Future.delayed(const Duration(milliseconds: 500));
   }
 
   // ═══════════════════════════════════════════════════════
-  // CONNEXION
+  // CONNEXION AMÉLIORÉE
   // ═══════════════════════════════════════════════════════
 
   Future<bool> connectToDevice(BluetoothDevice device) async {
@@ -153,59 +183,119 @@ class BluetoothFridgeService extends ChangeNotifier {
       return false;
     }
 
+    debugPrint('🔗 ═══════════════════════════════════');
+    debugPrint('🔗 CONNEXION À: ${device.name ?? device.address}');
+    debugPrint('🔗 Adresse: ${device.address}');
+    debugPrint('🔗 ═══════════════════════════════════');
+
     _isConnecting = true;
     notifyListeners();
 
     try {
-      debugPrint('🔗 Connexion à ${device.name}...');
+      // 1️⃣ DÉCONNEXION FORCÉE de tout appareil existant
+      await forceDisconnect();
 
-      // Fermer connexion existante
-      await disconnect();
+      debugPrint('📡 Établissement de la connexion...');
 
-      // Nouvelle connexion
+      // 2️⃣ NOUVELLE CONNEXION
       _connection = await BluetoothConnection.toAddress(device.address);
+
+      if (_connection == null || !_connection!.isConnected) {
+        throw Exception('Connexion échouée');
+      }
+
+      debugPrint('✅ Connexion Bluetooth établie');
+
+      // 3️⃣ MISE À JOUR DES ÉTATS
       _connectedDevice = device;
       _isConnected = true;
       _isConnecting = false;
       _reconnectionAttempts = 0;
+      _messagesReceived = 0;
 
       await _saveDevice(device);
 
-      // Écouter les données
+      // 4️⃣ ÉCOUTE DES DONNÉES
       _listenToData();
 
-      // Ping initial
+      // 5️⃣ TEST DE LA CONNEXION
+      debugPrint('📤 Envoi de commandes de test...');
       await _sendCommand('PING');
+      await Future.delayed(const Duration(milliseconds: 500));
       await _sendCommand('STATUS');
 
-      debugPrint('✅ Connecté à ${device.name}');
-      notifyListeners();
+      // 6️⃣ ATTENDRE UNE RÉPONSE (timeout 3s)
+      debugPrint('⏳ Attente de réponse Arduino...');
+      final responseReceived = await _waitForResponse(
+        timeout: const Duration(seconds: 3),
+      );
 
-      return true;
+      if (responseReceived) {
+        debugPrint('✅ ═══════════════════════════════════');
+        debugPrint('✅ CONNEXION RÉUSSIE');
+        debugPrint('✅ Device: ${device.name}');
+        debugPrint('✅ Messages reçus: $_messagesReceived');
+        debugPrint('✅ ═══════════════════════════════════');
+        notifyListeners();
+        return true;
+      } else {
+        debugPrint('⚠️  Aucune réponse de l\'Arduino');
+        debugPrint('⚠️  Vérifiez que le HC-05 est bien connecté à l\'Arduino');
+        await forceDisconnect();
+        return false;
+      }
     } catch (e) {
-      debugPrint('❌ Erreur connexion: $e');
+      debugPrint('❌ ═══════════════════════════════════');
+      debugPrint('❌ ERREUR CONNEXION: $e');
+      debugPrint('❌ ═══════════════════════════════════');
+
       _isConnected = false;
       _isConnecting = false;
       notifyListeners();
 
-      // Tenter reconnexion
-      _scheduleReconnection();
+      await forceDisconnect();
 
       return false;
     }
   }
 
+  // 🆕 Attendre une réponse de l'Arduino
+  Future<bool> _waitForResponse({required Duration timeout}) async {
+    final startCount = _messagesReceived;
+    final startTime = DateTime.now();
+
+    while (DateTime.now().difference(startTime) < timeout) {
+      if (_messagesReceived > startCount) {
+        return true;
+      }
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+
+    return false;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // ÉCOUTE DES DONNÉES
+  // ═══════════════════════════════════════════════════════
+
   void _listenToData() {
     if (_connection == null) return;
 
+    debugPrint('👂 Démarrage de l\'écoute des données...');
+
     _dataSubscription = _connection!.input!.listen(
       _handleIncomingData,
-      onDone: _handleDisconnection,
+      onDone: () {
+        debugPrint('📡 Stream fermé (onDone)');
+        _handleDisconnection();
+      },
       onError: (error) {
         debugPrint('❌ Erreur stream: $error');
         _handleDisconnection();
       },
     );
+
+    debugPrint('✅ Écoute activée');
   }
 
   // ═══════════════════════════════════════════════════════
@@ -218,6 +308,9 @@ class BluetoothFridgeService extends ChangeNotifier {
     String message = utf8.decode(data);
     _buffer += message;
 
+    _messagesReceived++;
+    _lastMessageTime = DateTime.now();
+
     // Traiter les lignes complètes
     while (_buffer.contains('\n')) {
       int index = _buffer.indexOf('\n');
@@ -225,17 +318,17 @@ class BluetoothFridgeService extends ChangeNotifier {
       _buffer = _buffer.substring(index + 1);
 
       if (line.isNotEmpty) {
+        debugPrint('📥 Arduino: $line'); // 🆕 Log chaque message
         _processMessage(line);
       }
     }
   }
 
   void _processMessage(String message) {
-    debugPrint('📥 Arduino: $message');
-
-    // Heartbeat simple
+    // Heartbeat
     if (message == 'HEARTBEAT' || message == 'PONG') {
       _lastHeartbeat = DateTime.now();
+      debugPrint('💓 Heartbeat reçu');
       return;
     }
 
@@ -253,9 +346,10 @@ class BluetoothFridgeService extends ChangeNotifier {
     FridgeEvent? event;
     Map<String, dynamic>? data;
 
-    // Parser l'événement
     List<String> parts = eventStr.split(':');
     String eventName = parts[0];
+
+    debugPrint('📨 Événement: $eventName');
 
     switch (eventName) {
       case 'READY':
@@ -289,7 +383,6 @@ class BluetoothFridgeService extends ChangeNotifier {
         event = FridgeEvent.closed;
         _currentState = 'CLOSED';
 
-        // Parser les stats: CLOSED:photoCount:duration
         if (parts.length >= 3) {
           data = {
             'photo_count': int.tryParse(parts[1]) ?? 0,
@@ -317,7 +410,6 @@ class BluetoothFridgeService extends ChangeNotifier {
   }
 
   void _handleConfig(String configStr) {
-    // CONFIG:distance
     try {
       _referenceDistance = int.parse(configStr);
       debugPrint('⚙️  Distance référence: $_referenceDistance cm');
@@ -348,9 +440,9 @@ class BluetoothFridgeService extends ChangeNotifier {
     try {
       _connection!.output.add(utf8.encode('$command\n'));
       await _connection!.output.allSent;
-      debugPrint('📤 Commande envoyée: $command');
+      debugPrint('📤 Envoyé: $command');
     } catch (e) {
-      debugPrint('❌ Erreur envoi commande: $e');
+      debugPrint('❌ Erreur envoi: $e');
     }
   }
 
@@ -378,26 +470,9 @@ class BluetoothFridgeService extends ChangeNotifier {
   // ═══════════════════════════════════════════════════════
 
   Future<void> disconnect() async {
-    if (_connection == null) return;
-
-    debugPrint('🔌 Déconnexion Bluetooth');
-
-    _reconnectionTimer?.cancel();
-    _reconnectionTimer = null;
+    debugPrint('🔌 Déconnexion demandée par l\'utilisateur');
     _autoReconnect = false;
-
-    await _dataSubscription?.cancel();
-    _dataSubscription = null;
-
-    await _connection?.close();
-    _connection = null;
-
-    _isConnected = false;
-    _connectedDevice = null;
-    _currentState = 'IDLE';
-
-    debugPrint('✅ Déconnecté');
-    notifyListeners();
+    await forceDisconnect();
   }
 
   void _handleDisconnection() {
@@ -409,7 +484,6 @@ class BluetoothFridgeService extends ChangeNotifier {
 
     notifyListeners();
 
-    // Tenter reconnexion automatique
     if (_autoReconnect && _connectedDevice != null) {
       _scheduleReconnection();
     }
@@ -438,7 +512,27 @@ class BluetoothFridgeService extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════
-  // STATISTIQUES
+  // SCAN
+  // ═══════════════════════════════════════════════════════
+
+  Future<List<BluetoothDevice>> getAvailableDevices() async {
+    try {
+      final bondedDevices = await _bluetooth.getBondedDevices();
+
+      debugPrint('📱 ${bondedDevices.length} devices appairés');
+      for (var device in bondedDevices) {
+        debugPrint('  - ${device.name} (${device.address})');
+      }
+
+      return bondedDevices;
+    } catch (e) {
+      debugPrint('❌ Erreur scan: $e');
+      return [];
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // STATS
   // ═══════════════════════════════════════════════════════
 
   Map<String, dynamic> getStats() {
@@ -455,6 +549,8 @@ class BluetoothFridgeService extends ChangeNotifier {
       'total_sessions': _totalSessions,
       'total_photos': _totalPhotos,
       'reconnection_attempts': _reconnectionAttempts,
+      'messages_received': _messagesReceived,
+      'last_message': _lastMessageTime?.toIso8601String(),
     };
   }
 
@@ -465,7 +561,10 @@ class BluetoothFridgeService extends ChangeNotifier {
     debugPrint('📊 ═══════════════════════════════════');
     debugPrint('   Connecté: ${stats['is_connected']}');
     debugPrint('   Device: ${stats['device_name']}');
+    debugPrint('   Adresse: ${stats['device_address']}');
     debugPrint('   État: ${stats['current_state']}');
+    debugPrint('   Messages reçus: ${stats['messages_received']}');
+    debugPrint('   Dernier message: ${stats['last_message'] ?? "Jamais"}');
     debugPrint('   Sessions: ${stats['total_sessions']}');
     debugPrint('   Photos: ${stats['total_photos']}');
     debugPrint('📊 ═══════════════════════════════════');

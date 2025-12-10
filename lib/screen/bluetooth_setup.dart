@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:kiosque_samsung_ultra/screen/bluetooth_debug.dart';
 import 'package:kiosque_samsung_ultra/service/bluetooth_fridge_service.dart';
 import 'package:kiosque_samsung_ultra/service/auto_capture_service.dart';
 import 'package:provider/provider.dart';
+import 'dart:async';
 
 /// ═══════════════════════════════════════════════════════════
 /// Page de configuration Bluetooth et Auto-Capture
@@ -18,9 +20,11 @@ class BluetoothSetupPage extends StatefulWidget {
 
 class _BluetoothSetupPageState extends State<BluetoothSetupPage>
     with SingleTickerProviderStateMixin {
-  List<BluetoothDevice> _devices = [];
+  List<BluetoothDevice> _bondedDevices = [];
+  List<BluetoothDiscoveryResult> _discoveredDevices = [];
   bool _isScanning = false;
   bool _bluetoothEnabled = false;
+  StreamSubscription<BluetoothDiscoveryResult>? _discoverySubscription;
 
   late TabController _tabController;
 
@@ -35,6 +39,7 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
   @override
   void dispose() {
     _tabController.dispose();
+    _discoverySubscription?.cancel();
     super.dispose();
   }
 
@@ -53,38 +58,151 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
     setState(() => _isScanning = true);
 
     try {
+      // 1. Charger les devices appairés
       final bluetoothService = context.read<BluetoothFridgeService>();
-      final devices = await bluetoothService.getAvailableDevices();
+      final bonded = await bluetoothService.getAvailableDevices();
 
       setState(() {
-        _devices = devices;
-        _isScanning = false;
+        _bondedDevices = bonded;
       });
+
+      debugPrint('📱 ${bonded.length} devices appairés');
+
+      // 2. Lancer le scan pour découvrir de nouveaux appareils
+      await _startDiscovery();
     } catch (e) {
       setState(() => _isScanning = false);
       _showError('Erreur chargement: $e');
     }
   }
 
+  /// 🆕 SCAN POUR DÉCOUVRIR DE NOUVEAUX PÉRIPHÉRIQUES
+  Future<void> _startDiscovery() async {
+    // Annuler le scan précédent
+    await _discoverySubscription?.cancel();
+
+    setState(() {
+      _discoveredDevices.clear();
+      _isScanning = true;
+    });
+
+    debugPrint('🔍 Démarrage du scan Bluetooth...');
+
+    try {
+      _discoverySubscription = FlutterBluetoothSerial.instance
+          .startDiscovery()
+          .listen((result) {
+            debugPrint(
+              '🔵 Découvert: ${result.device.name ?? "Unknown"} (${result.device.address})',
+            );
+
+            setState(() {
+              // Éviter les doublons
+              final existingIndex = _discoveredDevices.indexWhere(
+                (r) => r.device.address == result.device.address,
+              );
+
+              if (existingIndex >= 0) {
+                _discoveredDevices[existingIndex] = result;
+              } else {
+                _discoveredDevices.add(result);
+              }
+            });
+          });
+
+      // Arrêter le scan après 12 secondes
+      Future.delayed(const Duration(seconds: 12), () {
+        _stopDiscovery();
+      });
+    } catch (e) {
+      debugPrint('❌ Erreur scan: $e');
+      setState(() => _isScanning = false);
+      _showError('Erreur scan: $e');
+    }
+  }
+
+  void _stopDiscovery() {
+    _discoverySubscription?.cancel();
+    setState(() => _isScanning = false);
+    debugPrint('🛑 Scan terminé');
+  }
+
   Future<void> _connectToDevice(BluetoothDevice device) async {
-    _showLoading('Connexion à ${device.name}...');
+    _showLoading('Connexion à ${device.name ?? device.address}...');
 
     try {
       final bluetoothService = context.read<BluetoothFridgeService>();
-      final success = await bluetoothService.connectToDevice(device);
 
-      Navigator.pop(context); // Fermer loading
-
-      if (mounted) {
-        if (success) {
-          _showSuccess('Connecté à ${device.name}');
-        } else {
-          _showError('Échec connexion à ${device.name}');
-        }
+      // Vérifier si c'est un appareil compatible (HC-05, HC-06, etc.)
+      if (!_isCompatibleDevice(device)) {
+        Navigator.pop(context);
+        _showWarning(
+          'Cet appareil ne semble pas être un module HC-05/HC-06.\n'
+          'Êtes-vous sûr de vouloir continuer ?',
+          onConfirm: () async {
+            _showLoading('Tentative de connexion...');
+            await _attemptConnection(bluetoothService, device);
+          },
+        );
+        return;
       }
+
+      await _attemptConnection(bluetoothService, device);
     } catch (e) {
       Navigator.pop(context);
       _showError('Échec connexion: $e');
+    }
+  }
+
+  /// Vérifie si l'appareil semble être un module Bluetooth compatible
+  bool _isCompatibleDevice(BluetoothDevice device) {
+    final name = (device.name ?? '').toUpperCase();
+    return name.contains('HC-') ||
+        name.contains('ARDUINO') ||
+        name.contains('BT') ||
+        name == 'HC-05' ||
+        name == 'HC-06' ||
+        name.isEmpty; // HC-05 non configuré
+  }
+
+  Future<void> _attemptConnection(
+    BluetoothFridgeService bluetoothService,
+    BluetoothDevice device,
+  ) async {
+    try {
+      final success = await bluetoothService.connectToDevice(device);
+
+      if (mounted) {
+        Navigator.pop(context); // Fermer loading
+
+        if (success) {
+          _showSuccess('Connecté à ${device.name ?? device.address}');
+        } else {
+          _showError(
+            'Impossible de se connecter.\n'
+            'Vérifiez que l\'Arduino est allumé et à proximité.',
+          );
+        }
+      }
+    } on Exception catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+
+        // Erreurs spécifiques
+        if (e.toString().contains('read failed')) {
+          _showError(
+            'Connexion refusée par l\'appareil.\n'
+            'Cet appareil n\'accepte peut-être pas les connexions Serial.',
+          );
+        } else if (e.toString().contains('timeout')) {
+          _showError(
+            'Timeout de connexion.\n'
+            'Assurez-vous que l\'appareil est allumé et à portée.',
+          );
+        } else {
+          _showError('Erreur de connexion: $e');
+        }
+      }
     }
   }
 
@@ -113,6 +231,35 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
   void _showSuccess(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: Colors.green),
+    );
+  }
+
+  void _showWarning(String message, {VoidCallback? onConfirm}) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Attention'),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              onConfirm?.call();
+            },
+            child: const Text('Continuer'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -160,41 +307,110 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
 
           const SizedBox(height: 24),
 
+          // 🆕 PANNEAU DE DEBUG (AJOUTÉ ICI)
+          Consumer<BluetoothFridgeService>(
+            builder: (context, bluetoothService, _) {
+              return BluetoothDebugPanel(bluetoothService: bluetoothService);
+            },
+          ),
+
+          const SizedBox(height: 24),
+
           // Liste des devices
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Appareils disponibles',
+                'Appareils Bluetooth',
                 style: TextStyle(
                   color: isDark ? Colors.white : Colors.black87,
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              IconButton(
-                onPressed: _isScanning ? null : _loadDevices,
-                icon: Icon(
-                  _isScanning ? Icons.refresh : Icons.refresh,
-                  color: _isScanning ? Colors.grey : Colors.blue,
-                ),
+              Row(
+                children: [
+                  if (_isScanning)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  IconButton(
+                    onPressed: _isScanning ? _stopDiscovery : _loadDevices,
+                    icon: Icon(_isScanning ? Icons.stop : Icons.refresh),
+                    color: _isScanning ? Colors.red : Colors.blue,
+                  ),
+                ],
               ),
             ],
           ),
 
           const SizedBox(height: 12),
 
-          if (_isScanning)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.all(32),
-                child: CircularProgressIndicator(),
+          // Appareils appairés
+          if (_bondedDevices.isNotEmpty) ...[
+            Row(
+              children: [
+                const Icon(Icons.link, size: 16, color: Color(0xFF3B82F6)),
+                const SizedBox(width: 8),
+                Text(
+                  'Appairés (${_bondedDevices.length})',
+                  style: TextStyle(
+                    color: isDark ? Colors.white70 : Colors.black54,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ..._bondedDevices.map(
+              (device) => _buildDeviceCard(device, isDark, isBonded: true),
+            ),
+            const SizedBox(height: 16),
+          ],
+
+          // Appareils découverts
+          if (_discoveredDevices.isNotEmpty) ...[
+            Row(
+              children: [
+                const Icon(
+                  Icons.bluetooth_searching,
+                  size: 16,
+                  color: Color(0xFF10B981),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Découverts (${_discoveredDevices.length})',
+                  style: TextStyle(
+                    color: isDark ? Colors.white70 : Colors.black54,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ..._discoveredDevices.map(
+              (result) => _buildDeviceCard(
+                result.device,
+                isDark,
+                isBonded: false,
+                rssi: result.rssi,
               ),
-            )
-          else if (_devices.isEmpty)
-            _buildEmptyDevicesList(isDark)
-          else
-            ..._devices.map((device) => _buildDeviceCard(device, isDark)),
+            ),
+            const SizedBox(height: 16),
+          ],
+
+          // État vide
+          if (!_isScanning &&
+              _bondedDevices.isEmpty &&
+              _discoveredDevices.isEmpty)
+            _buildEmptyDevicesList(isDark),
 
           const SizedBox(height: 24),
 
@@ -404,11 +620,17 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
     );
   }
 
-  Widget _buildDeviceCard(BluetoothDevice device, bool isDark) {
+  Widget _buildDeviceCard(
+    BluetoothDevice device,
+    bool isDark, {
+    bool isBonded = false,
+    int? rssi,
+  }) {
     return Consumer<BluetoothFridgeService>(
       builder: (context, bluetoothService, _) {
         final isConnected =
             bluetoothService.connectedDevice?.address == device.address;
+        final isCompatible = _isCompatibleDevice(device);
 
         return Container(
           margin: const EdgeInsets.only(bottom: 12),
@@ -425,22 +647,36 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
                   border: Border.all(
                     color: isConnected
                         ? const Color(0xFF10B981).withOpacity(0.5)
+                        : isCompatible
+                        ? const Color(0xFF3B82F6).withOpacity(0.3)
                         : (isDark
                               ? const Color(0xFF475569)
                               : const Color(0xFFE2E8F0)),
+                    width: isConnected ? 2 : 1,
                   ),
                 ),
                 child: Row(
                   children: [
+                    // Icône
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF3B82F6).withOpacity(0.15),
+                        color:
+                            (isConnected
+                                    ? const Color(0xFF10B981)
+                                    : isCompatible
+                                    ? const Color(0xFF3B82F6)
+                                    : const Color(0xFF64748B))
+                                .withOpacity(0.15),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Icon(
-                        Icons.bluetooth,
-                        color: Color(0xFF3B82F6),
+                      child: Icon(
+                        isCompatible ? Icons.developer_board : Icons.bluetooth,
+                        color: isConnected
+                            ? const Color(0xFF10B981)
+                            : isCompatible
+                            ? const Color(0xFF3B82F6)
+                            : const Color(0xFF64748B),
                         size: 24,
                       ),
                     ),
@@ -449,25 +685,77 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            device.name ?? 'Appareil inconnu',
-                            style: TextStyle(
-                              color: isDark ? Colors.white : Colors.black87,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  device.name ?? 'HC-05 (non configuré)',
+                                  style: TextStyle(
+                                    color: isDark
+                                        ? Colors.white
+                                        : Colors.black87,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              if (isCompatible)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(
+                                      0xFF10B981,
+                                    ).withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Text(
+                                    'Compatible',
+                                    style: TextStyle(
+                                      color: Color(0xFF10B981),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                           const SizedBox(height: 4),
-                          Text(
-                            device.address,
-                            style: TextStyle(
-                              color: isDark ? Colors.white54 : Colors.black54,
-                              fontSize: 13,
-                            ),
+                          Row(
+                            children: [
+                              Text(
+                                device.address,
+                                style: TextStyle(
+                                  color: isDark
+                                      ? Colors.white54
+                                      : Colors.black54,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              if (rssi != null) ...[
+                                const SizedBox(width: 12),
+                                Icon(
+                                  _getSignalIcon(rssi),
+                                  size: 14,
+                                  color: _getSignalColor(rssi),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '$rssi dBm',
+                                  style: TextStyle(
+                                    color: _getSignalColor(rssi),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ],
                       ),
                     ),
+                    const SizedBox(width: 12),
                     if (isConnected)
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -488,10 +776,10 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
                         ),
                       )
                     else
-                      const Icon(
-                        Icons.arrow_forward_ios,
+                      Icon(
+                        isBonded ? Icons.link : Icons.add_link,
                         size: 16,
-                        color: Color(0xFF64748B),
+                        color: const Color(0xFF64748B),
                       ),
                   ],
                 ),
@@ -503,19 +791,33 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
     );
   }
 
+  IconData _getSignalIcon(int rssi) {
+    if (rssi >= -50) return Icons.signal_cellular_4_bar;
+    if (rssi >= -60) return Icons.signal_cellular_alt_2_bar;
+    if (rssi >= -70) return Icons.signal_cellular_alt_1_bar;
+    return Icons.signal_cellular_0_bar;
+  }
+
+  Color _getSignalColor(int rssi) {
+    if (rssi >= -50) return const Color(0xFF10B981); // Excellent
+    if (rssi >= -60) return const Color(0xFF3B82F6); // Bon
+    if (rssi >= -70) return const Color(0xFFF59E0B); // Moyen
+    return const Color(0xFFEF4444); // Faible
+  }
+
   Widget _buildEmptyDevicesList(bool isDark) {
     return Container(
       padding: const EdgeInsets.all(32),
       child: Column(
         children: [
           Icon(
-            Icons.bluetooth_searching,
+            _isScanning ? Icons.bluetooth_searching : Icons.bluetooth_disabled,
             size: 64,
             color: isDark ? Colors.white24 : Colors.black26,
           ),
           const SizedBox(height: 16),
           Text(
-            'Aucun appareil trouvé',
+            _isScanning ? 'Recherche en cours...' : 'Aucun appareil trouvé',
             style: TextStyle(
               color: isDark ? Colors.white54 : Colors.black54,
               fontSize: 16,
@@ -523,7 +825,9 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
           ),
           const SizedBox(height: 8),
           Text(
-            'Appairez d\'abord l\'Arduino dans\nles paramètres Bluetooth du système',
+            _isScanning
+                ? 'Assurez-vous que l\'Arduino HC-05\nest allumé et visible'
+                : 'Appuyez sur ⟳ pour rechercher des appareils',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: isDark ? Colors.white38 : Colors.black38,
@@ -569,15 +873,42 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
           _buildInstructionStep('1', 'Allumez l\'Arduino avec le module HC-05'),
           _buildInstructionStep(
             '2',
-            'Appairez via les paramètres Bluetooth (PIN: 1234)',
+            'L\'application scanne automatiquement les appareils',
           ),
           _buildInstructionStep(
             '3',
-            'Sélectionnez l\'appareil dans la liste ci-dessus',
+            'Sélectionnez le HC-05 dans la liste découverte',
           ),
-          _buildInstructionStep(
-            '4',
-            'L\'Arduino calibrera automatiquement la distance',
+          _buildInstructionStep('4', 'Le HC-05 va automatiquement se calibrer'),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF59E0B).withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: const Color(0xFFF59E0B).withOpacity(0.3),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.tips_and_updates,
+                  color: Color(0xFFF59E0B),
+                  size: 20,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Si le HC-05 n\'apparaît pas, vérifiez qu\'il clignote (mode découverte)',
+                    style: TextStyle(
+                      color: isDark ? Colors.white70 : Colors.black87,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
