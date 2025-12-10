@@ -211,92 +211,39 @@ class _KioskHomePageState extends State<KioskHomePage>
     });
 
     try {
-      debugPrint('🔍 Vérification kiosk existant...');
+      final initData = await _api.initKiosk(
+        deviceName: 'Samsung Galaxy S22 Kiosk',
+      );
 
-      // 1️⃣ Vérifier si un kiosk_id est stocké localement
-      final storedKioskId = await _api.getStoredKioskId();
+      setState(() {
+        _kioskId = initData['kiosk_id'];
+        _isPaired = initData['is_paired'] ?? false;
+        _fridgeId = initData['fridge_id'];
+        _fridgeName = initData['fridge_name'];
 
-      if (storedKioskId != null && storedKioskId.isNotEmpty) {
-        debugPrint('📦 Kiosk ID trouvé en local: $storedKioskId');
-
-        // 2️⃣ Vérifier le statut du kiosk sur le serveur
-        try {
-          final status = await _api.checkKioskStatus(storedKioskId);
-
-          debugPrint('📊 Status reçu: $status'); // DEBUG
-
-          // ✅ FIX: Vérifier plusieurs conditions
-          final isPaired =
-              status['is_paired'] == true ||
-              status['paired'] == true ||
-              status['fridge_id'] != null;
-
-          if (isPaired) {
-            debugPrint('✅ Kiosk restauré avec succès');
-
-            // S'assurer que toutes les données sont présentes
-            final fridgeId = status['fridge_id'] as int?;
-            final fridgeName = status['fridge_name'] as String?;
-
-            if (fridgeId != null) {
-              setState(() {
-                _kioskId = storedKioskId;
-                _isPaired = true;
-                _fridgeId = fridgeId;
-                _fridgeName = fridgeName;
-                _pairingCode = null;
-                _isInitializing = false;
-                _errorMessage = null;
-              });
-
-              _startHeartbeat();
-
-              if (mounted) {
-                _initializeOrchestrator();
-              }
-
-              return; // ✅ Succès
-            } else {
-              debugPrint('⚠️ fridge_id manquant dans la réponse');
-            }
-          } else {
-            debugPrint('⚠️ Kiosk non pairé');
-          }
-        } catch (e) {
-          debugPrint('⚠️ Kiosk invalide côté serveur: $e');
-          // Nettoyer l'ancien ID
-          await _api.clearKioskId();
+        if (_isPaired) {
+          _pairingCode = null;
+        } else {
+          _pairingCode = initData['pairing_code'];
+          _remainingSeconds = (initData['expires_in_minutes'] as int) * 60;
         }
-      } else {
-        debugPrint('ℹ️ Aucun kiosk_id stocké localement');
-      }
 
-      // 3️⃣ Créer un nouveau kiosk
-      debugPrint('🆕 Création nouveau kiosk...');
-      final initData = await _api.initKiosk(deviceName: 'Samsung Galaxy Kiosk');
-
-      _applyInitData(initData);
+        _isInitializing = false;
+      });
 
       if (_isPaired) {
         _startHeartbeat();
-        if (_fridgeId != null && mounted) {
-          _initializeOrchestrator();
-        }
       } else {
         _startCodeExpiration();
         _startHeartbeat();
         _startStatusCheck();
       }
-    } catch (e, stackTrace) {
-      debugPrint('❌ Erreur initialisation: $e');
-      debugPrint('Stack: $stackTrace');
-
+    } catch (e) {
       setState(() {
         _isInitializing = false;
-        _errorMessage = 'Erreur connexion serveur: $e';
+        _errorMessage = 'Erreur d\'initialisation: ${e.toString()}';
       });
 
-      // Retry après 5s
       Future.delayed(const Duration(seconds: 5), () {
         if (mounted && !_isPaired) {
           _checkExistingKiosk();
