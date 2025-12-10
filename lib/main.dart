@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:kiosque_samsung_ultra/screen/auto_capture_indicator.dart';
+import 'package:kiosque_samsung_ultra/screen/bluetooth_setup.dart';
+import 'package:kiosque_samsung_ultra/service/auto_capture_orchestrator.dart';
+import 'package:kiosque_samsung_ultra/service/auto_capture_service.dart';
+import 'package:kiosque_samsung_ultra/service/bluetooth_fridge_service.dart';
+import 'package:provider/provider.dart';
 import 'package:kiosque_samsung_ultra/service/scan_mode_service.dart';
 import 'dart:async';
 import 'service/api.dart';
@@ -15,7 +21,31 @@ void main() async {
 
   await ThemeSwitcher().init();
 
-  runApp(const SmartFridgeKioskApp());
+  // Initialiser services Auto-Capture
+  final bluetoothService = BluetoothFridgeService();
+  final captureService = AutoCaptureService();
+  final api = KioskApiService();
+
+  await bluetoothService.init();
+  await captureService.init();
+
+  // Créer l'orchestrateur avec injection des dépendances
+  final orchestrator = AutoCaptureOrchestrator(
+    bluetoothService: bluetoothService,
+    captureService: captureService,
+    api: api,
+  );
+
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: bluetoothService),
+        ChangeNotifierProvider.value(value: captureService),
+        ChangeNotifierProvider.value(value: orchestrator),
+      ],
+      child: const SmartFridgeKioskApp(),
+    ),
+  );
 }
 
 class SmartFridgeKioskApp extends StatelessWidget {
@@ -94,7 +124,6 @@ class _KioskHomePageState extends State<KioskHomePage>
     );
   }
 
-  // ✅ Méthode utilitaire pour extraire les données de manière sécurisée
   int _safeGetExpirationSeconds(Map<String, dynamic> data) {
     try {
       final expiresIn = data['expires_in_minutes'];
@@ -103,7 +132,7 @@ class _KioskHomePageState extends State<KioskHomePage>
         debugPrint(
           '⚠️ expires_in_minutes est null, utilisation de 5 min par défaut',
         );
-        return 300; // 5 minutes par défaut
+        return 300;
       }
 
       if (expiresIn is int) {
@@ -124,14 +153,13 @@ class _KioskHomePageState extends State<KioskHomePage>
       debugPrint(
         '⚠️ Type inattendu pour expires_in_minutes: ${expiresIn.runtimeType}',
       );
-      return 300; // 5 minutes par défaut
+      return 300;
     } catch (e) {
       debugPrint('❌ Erreur lors de l\'extraction de expires_in_minutes: $e');
       return 300;
     }
   }
 
-  // ✅ Méthode pour appliquer les données de l'API de manière sécurisée
   void _applyInitData(Map<String, dynamic> initData, {bool isPaired = false}) {
     setState(() {
       _kioskId = initData['kiosk_id'] as String?;
@@ -175,6 +203,15 @@ class _KioskHomePageState extends State<KioskHomePage>
 
       if (_isPaired) {
         _startHeartbeat();
+
+        // Initialiser auto-capture après pairing
+        if (_fridgeId != null && mounted) {
+          final orchestrator = context.read<AutoCaptureOrchestrator>();
+          await orchestrator.init(_fridgeId!);
+          debugPrint(
+            '🎯 Auto-capture orchestrator initialisé pour frigo #$_fridgeId',
+          );
+        }
       } else {
         _startCodeExpiration();
         _startHeartbeat();
@@ -198,9 +235,8 @@ class _KioskHomePageState extends State<KioskHomePage>
   }
 
   Future<void> _regenerateCode() async {
-    debugPrint('🔄 Regénération du code demandée...');
+    debugPrint('🔄 Régénération du code demandée...');
 
-    // Annuler tous les timers
     _codeExpirationTimer?.cancel();
     _statusCheckTimer?.cancel();
     _heartbeatTimer?.cancel();
@@ -213,7 +249,6 @@ class _KioskHomePageState extends State<KioskHomePage>
     });
 
     try {
-      // ✅ ÉTAPE 1 : Supprimer l'ancien kiosk pour forcer un nouveau
       if (_kioskId != null) {
         debugPrint('🗑️ Suppression de l\'ancien kiosk: $_kioskId');
         try {
@@ -223,12 +258,11 @@ class _KioskHomePageState extends State<KioskHomePage>
         }
       }
 
-      // ✅ ÉTAPE 2 : Forcer la création d'un nouveau kiosk
       debugPrint('📡 Création d\'un nouveau kiosk...');
 
       final initData = await _api.initKiosk(
         deviceName: 'Samsung Galaxy S22 Kiosk',
-        forceNew: true, // Paramètre pour forcer un nouveau kiosk
+        forceNew: true,
       );
 
       debugPrint('✅ Nouveau code reçu: $initData');
@@ -290,9 +324,17 @@ class _KioskHomePageState extends State<KioskHomePage>
             timer.cancel();
             _codeExpirationTimer?.cancel();
             _showSuccess('Kiosk pairé avec succès !');
+
+            // Initialiser auto-capture après pairing
+            if (_fridgeId != null && mounted) {
+              final orchestrator = context.read<AutoCaptureOrchestrator>();
+              await orchestrator.init(_fridgeId!);
+              debugPrint(
+                '🎯 Auto-capture orchestrator initialisé pour frigo #$_fridgeId',
+              );
+            }
           }
         } catch (e) {
-          // Ignorer les erreurs de polling
           debugPrint('⚠️ Erreur polling (ignorée): $e');
         }
       }
@@ -432,6 +474,14 @@ class _KioskHomePageState extends State<KioskHomePage>
             ),
             onSelected: (value) {
               switch (value) {
+                case 'auto_capture':
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const BluetoothSetupPage(),
+                    ),
+                  );
+                  break;
                 case 'scan':
                   Navigator.push(
                     context,
@@ -465,6 +515,17 @@ class _KioskHomePageState extends State<KioskHomePage>
               }
             },
             itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'auto_capture',
+                child: Row(
+                  children: [
+                    Icon(Icons.settings_bluetooth, size: 20),
+                    SizedBox(width: 12),
+                    Text('Auto-Capture'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'scan',
                 child: Row(
@@ -683,40 +744,56 @@ class _KioskHomePageState extends State<KioskHomePage>
   }
 
   Widget _buildPairedView() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(32),
-            decoration: BoxDecoration(
-              color: const Color(0xFF10B981).withOpacity(0.1),
-              shape: BoxShape.circle,
+    return Column(
+      children: [
+        // Indicateur auto-capture
+        Consumer<AutoCaptureOrchestrator>(
+          builder: (context, orchestrator, _) {
+            return AutoCaptureIndicator(orchestrator: orchestrator);
+          },
+        ),
+
+        Expanded(
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(32),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.check_circle,
+                    size: 80,
+                    color: Color(0xFF10B981),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Frigo connecté !',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _fridgeName ?? 'Mon Frigo',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'ID: $_fridgeId',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 48),
+                _buildModeSwitcher(),
+                const SizedBox(height: 24),
+                _buildQuickActions(),
+              ],
             ),
-            child: const Icon(
-              Icons.check_circle,
-              size: 80,
-              color: Color(0xFF10B981),
-            ),
           ),
-          const SizedBox(height: 24),
-          Text(
-            'Frigo connecté !',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _fridgeName ?? 'Mon Frigo',
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 4),
-          Text('ID: $_fridgeId', style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 48),
-          _buildModeSwitcher(),
-          const SizedBox(height: 24),
-          _buildQuickActions(),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -818,6 +895,20 @@ class _KioskHomePageState extends State<KioskHomePage>
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(
         children: [
+          _buildActionCard(
+            'Configuration Auto-Capture',
+            Icons.settings_bluetooth,
+            const Color(0xFF8B5CF6),
+            () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const BluetoothSetupPage(),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
           _buildActionCard(
             'Scanner le frigo',
             Icons.camera_alt,
