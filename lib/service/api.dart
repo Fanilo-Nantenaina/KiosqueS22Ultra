@@ -28,7 +28,7 @@ class KioskApiService {
   }) async {
     try {
       final deviceId = await _deviceIdService.getDeviceId();
-      debugPrint('Device ID: $deviceId');
+      debugPrint('Device ID (stable): $deviceId');
 
       if (!forceNew) {
         final existingKiosk = await _checkExistingDevice(deviceId);
@@ -44,24 +44,27 @@ class KioskApiService {
             await prefs.setString('kiosk_id', existingKiosk['kiosk_id']);
             return existingKiosk;
           } else {
+            debugPrint('Kiosk non pairé trouvé, on demande un nouveau code');
             forceNew = true;
           }
         }
       }
 
-      debugPrint('Création d\'un nouveau kiosk...');
+      debugPrint(
+        '🆕 ${forceNew ? "Régénération du code" : "Création"} du kiosk...',
+      );
 
-      final body = <String, dynamic>{
-        'device_id': forceNew
-            ? '${deviceId}_${DateTime.now().millisecondsSinceEpoch}'
-            : deviceId,
-      };
+      final body = <String, dynamic>{'device_id': deviceId};
+
+      if (forceNew) {
+        body['regenerate'] = true;
+      }
 
       if (deviceName != null) {
         body['device_name'] = deviceName;
       }
 
-      debugPrint('Body envoyé: $body');
+      debugPrint('📤 Body envoyé: $body');
 
       final response = await http
           .post(
@@ -71,8 +74,8 @@ class KioskApiService {
           )
           .timeout(timeout);
 
-      debugPrint('Response status: ${response.statusCode}');
-      debugPrint('Response body: ${response.body}');
+      debugPrint('📥 Response status: ${response.statusCode}');
+      debugPrint('📥 Response body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -80,8 +83,10 @@ class KioskApiService {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('kiosk_id', data['kiosk_id']);
 
-        debugPrint('Nouveau kiosk créé: ${data['kiosk_id']}');
-        debugPrint('Code: ${data['pairing_code']}');
+        debugPrint(
+          'Kiosk ${forceNew ? "mis à jour" : "créé"}: ${data['kiosk_id']}',
+        );
+        debugPrint('🔑 Code: ${data['pairing_code']}');
 
         return data;
       } else {
@@ -185,7 +190,7 @@ class KioskApiService {
   Future<void> clearKioskId() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('kiosk_id');
-    debugPrint(' Kiosk ID supprimé du stockage local');
+    debugPrint('Kiosk ID supprimé du stockage local');
   }
 
   Future<List<dynamic>> getInventory(int fridgeId) async {

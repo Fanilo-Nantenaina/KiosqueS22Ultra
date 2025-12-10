@@ -254,6 +254,7 @@ class _VisionScanPageState extends State<VisionScanPage> {
 
     return Column(
       children: [
+        // Header avec stats de capture
         if (widget.autoCaptureService != null)
           ListenableBuilder(
             listenable: widget.autoCaptureService!,
@@ -274,20 +275,17 @@ class _VisionScanPageState extends State<VisionScanPage> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      const Color(0xFF3B82F6).withOpacity(0.2),
-                      Colors.transparent,
-                    ],
-                  ),
+                  color: Colors.black.withOpacity(0.7),
                   border: Border(
                     bottom: BorderSide(
-                      color: const Color(0xFF3B82F6).withOpacity(0.3),
+                      color: Colors.red.withOpacity(0.5),
+                      width: 2,
                     ),
                   ),
                 ),
                 child: Row(
                   children: [
+                    // Indicateur REC animé
                     Container(
                       width: 12,
                       height: 12,
@@ -296,9 +294,9 @@ class _VisionScanPageState extends State<VisionScanPage> {
                         shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.red.withOpacity(0.5),
-                            blurRadius: 8,
-                            spreadRadius: 2,
+                            color: Colors.red.withOpacity(0.6),
+                            blurRadius: 10,
+                            spreadRadius: 3,
                           ),
                         ],
                       ),
@@ -308,10 +306,10 @@ class _VisionScanPageState extends State<VisionScanPage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
+                          const Text(
                             'Capture en cours',
                             style: TextStyle(
-                              color: isDark ? Colors.white : Colors.black87,
+                              color: Colors.white,
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
                             ),
@@ -319,8 +317,8 @@ class _VisionScanPageState extends State<VisionScanPage> {
                           const SizedBox(height: 4),
                           Text(
                             '$photoCount/$maxPhotos photos • ${durationSec}s',
-                            style: TextStyle(
-                              color: isDark ? Colors.white70 : Colors.black54,
+                            style: const TextStyle(
+                              color: Colors.white70,
                               fontSize: 13,
                             ),
                           ),
@@ -333,21 +331,24 @@ class _VisionScanPageState extends State<VisionScanPage> {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF10B981).withOpacity(0.2),
+                        color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.3),
+                        ),
                       ),
                       child: Row(
                         children: [
                           const Icon(
                             Icons.photo_camera,
                             size: 16,
-                            color: Color(0xFF10B981),
+                            color: Colors.white,
                           ),
                           const SizedBox(width: 4),
                           Text(
                             '$photoCount',
                             style: const TextStyle(
-                              color: Color(0xFF10B981),
+                              color: Colors.white,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -360,67 +361,84 @@ class _VisionScanPageState extends State<VisionScanPage> {
             },
           ),
 
+        // Vue caméra plein écran - SANS DÉFORMATION
         Expanded(
-          child: Stack(
-            children: [
-              Center(
-                child: AspectRatio(
-                  aspectRatio: _cameraController!.value.aspectRatio,
-                  child: CameraPreview(_cameraController!),
+          child: Container(
+            color: Colors.black,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // Aperçu caméra optimisé pour remplir l'écran sans déformation
+                FittedBox(
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: _cameraController!.value.previewSize!.height,
+                    height: _cameraController!.value.previewSize!.width,
+                    child: CameraPreview(_cameraController!),
+                  ),
                 ),
-              ),
 
-              CustomPaint(
-                size: Size.infinite,
-                painter: CameraGridPainter(
-                  color: Colors.white.withOpacity(0.3),
-                ),
-              ),
-
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.topCenter,
-                      colors: [
-                        Colors.black.withOpacity(0.8),
-                        Colors.transparent,
+                // Overlay d'instructions (gradient subtil)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 32,
+                    ),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [
+                          Colors.black.withOpacity(0.7),
+                          Colors.black.withOpacity(0.3),
+                          Colors.transparent,
+                        ],
+                        stops: const [0.0, 0.5, 1.0],
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.camera_alt,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Capture automatique active',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Photos prises automatiquement toutes les ${widget.autoCaptureService?.captureInterval ?? 3}s',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
                       ],
                     ),
                   ),
-                  child: Column(
-                    children: [
-                      const Icon(
-                        Icons.lightbulb_outline,
-                        color: Colors.white70,
-                        size: 28,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Gardez une vue dégagée du frigo',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'La caméra capture automatiquement\ndes photos toutes les ${widget.autoCaptureService?.captureInterval ?? 3}s',
-                        style: TextStyle(color: Colors.white70, fontSize: 14),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
@@ -1102,42 +1120,4 @@ class _VisionScanPageState extends State<VisionScanPage> {
       ),
     );
   }
-}
-
-class CameraGridPainter extends CustomPainter {
-  final Color color;
-
-  CameraGridPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1;
-
-    canvas.drawLine(
-      Offset(size.width / 3, 0),
-      Offset(size.width / 3, size.height),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(2 * size.width / 3, 0),
-      Offset(2 * size.width / 3, size.height),
-      paint,
-    );
-
-    canvas.drawLine(
-      Offset(0, size.height / 3),
-      Offset(size.width, size.height / 3),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(0, 2 * size.height / 3),
-      Offset(size.width, 2 * size.height / 3),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
