@@ -34,7 +34,6 @@ void main() async {
       providers: [
         ChangeNotifierProvider.value(value: bluetoothService),
         ChangeNotifierProvider.value(value: captureService),
-        // L'orchestrateur sera créé plus tard avec le context
       ],
       child: SmartFridgeKioskApp(
         bluetoothService: bluetoothService,
@@ -212,20 +211,74 @@ class _KioskHomePageState extends State<KioskHomePage>
     });
 
     try {
-      debugPrint('🔍 Vérification d\'un kiosk existant...');
+      debugPrint('🔍 Vérification kiosk existant...');
 
-      final initData = await _api.initKiosk(
-        deviceName: 'Samsung Galaxy S22 Kiosk',
-      );
+      // 1️⃣ Vérifier si un kiosk_id est stocké localement
+      final storedKioskId = await _api.getStoredKioskId();
 
-      debugPrint('✅ Réponse API reçue: $initData');
+      if (storedKioskId != null && storedKioskId.isNotEmpty) {
+        debugPrint('📦 Kiosk ID trouvé en local: $storedKioskId');
+
+        // 2️⃣ Vérifier le statut du kiosk sur le serveur
+        try {
+          final status = await _api.checkKioskStatus(storedKioskId);
+
+          debugPrint('📊 Status reçu: $status'); // DEBUG
+
+          // ✅ FIX: Vérifier plusieurs conditions
+          final isPaired =
+              status['is_paired'] == true ||
+              status['paired'] == true ||
+              status['fridge_id'] != null;
+
+          if (isPaired) {
+            debugPrint('✅ Kiosk restauré avec succès');
+
+            // S'assurer que toutes les données sont présentes
+            final fridgeId = status['fridge_id'] as int?;
+            final fridgeName = status['fridge_name'] as String?;
+
+            if (fridgeId != null) {
+              setState(() {
+                _kioskId = storedKioskId;
+                _isPaired = true;
+                _fridgeId = fridgeId;
+                _fridgeName = fridgeName;
+                _pairingCode = null;
+                _isInitializing = false;
+                _errorMessage = null;
+              });
+
+              _startHeartbeat();
+
+              if (mounted) {
+                _initializeOrchestrator();
+              }
+
+              return; // ✅ Succès
+            } else {
+              debugPrint('⚠️ fridge_id manquant dans la réponse');
+            }
+          } else {
+            debugPrint('⚠️ Kiosk non pairé');
+          }
+        } catch (e) {
+          debugPrint('⚠️ Kiosk invalide côté serveur: $e');
+          // Nettoyer l'ancien ID
+          await _api.clearKioskId();
+        }
+      } else {
+        debugPrint('ℹ️ Aucun kiosk_id stocké localement');
+      }
+
+      // 3️⃣ Créer un nouveau kiosk
+      debugPrint('🆕 Création nouveau kiosk...');
+      final initData = await _api.initKiosk(deviceName: 'Samsung Galaxy Kiosk');
 
       _applyInitData(initData);
 
       if (_isPaired) {
         _startHeartbeat();
-
-        // Initialiser auto-capture après pairing
         if (_fridgeId != null && mounted) {
           _initializeOrchestrator();
         }
@@ -235,14 +288,15 @@ class _KioskHomePageState extends State<KioskHomePage>
         _startStatusCheck();
       }
     } catch (e, stackTrace) {
-      debugPrint('❌ Erreur lors de l\'initialisation: $e');
-      debugPrint('Stack trace: $stackTrace');
+      debugPrint('❌ Erreur initialisation: $e');
+      debugPrint('Stack: $stackTrace');
 
       setState(() {
         _isInitializing = false;
-        _errorMessage = 'Erreur d\'initialisation: ${e.toString()}';
+        _errorMessage = 'Erreur connexion serveur: $e';
       });
 
+      // Retry après 5s
       Future.delayed(const Duration(seconds: 5), () {
         if (mounted && !_isPaired) {
           _checkExistingKiosk();
@@ -251,7 +305,7 @@ class _KioskHomePageState extends State<KioskHomePage>
     }
   }
 
-  /// 🆕 Initialiser l'orchestrateur avec le context
+  /// Initialiser l'orchestrateur avec le context
   void _initializeOrchestrator() {
     if (_fridgeId == null || _orchestrator != null) return;
 
@@ -259,7 +313,7 @@ class _KioskHomePageState extends State<KioskHomePage>
       bluetoothService: widget.bluetoothService,
       captureService: widget.captureService,
       api: widget.api,
-      context: context, // 🎯 Passer le context
+      context: context,
     );
 
     _orchestrator!.init(_fridgeId!);
@@ -791,36 +845,148 @@ class _KioskHomePageState extends State<KioskHomePage>
 
         Expanded(
           child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(32),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF10B981).withOpacity(0.1),
-                    shape: BoxShape.circle,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(32),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981).withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.check_circle,
+                      size: 80,
+                      color: Color(0xFF10B981),
+                    ),
                   ),
-                  child: const Icon(
-                    Icons.check_circle,
-                    size: 80,
-                    color: Color(0xFF10B981),
+                  const SizedBox(height: 24),
+                  Text(
+                    'Frigo connecté !',
+                    style: Theme.of(context).textTheme.titleLarge,
                   ),
-                ),
-                const SizedBox(height: 24),
-                Text(
-                  'Frigo connecté !',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _fridgeName ?? 'Mon Frigo',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              ],
+                  const SizedBox(height: 8),
+                  Text(
+                    _fridgeName ?? 'Mon Frigo',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'ID: $_fridgeId',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 48),
+                  _buildQuickActions(),
+                ],
+              ),
             ),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildQuickActions() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(
+        children: [
+          _buildActionCard(
+            'Scanner le frigo',
+            Icons.camera_alt,
+            const Color(0xFF3B82F6),
+            () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => VisionScanPage(fridgeId: _fridgeId!),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _buildActionCard(
+            'Voir l\'inventaire',
+            Icons.inventory_2,
+            const Color(0xFF10B981),
+            () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      KioskInventoryPage(fridgeId: _fridgeId!),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _buildActionCard(
+            'Consulter les alertes',
+            Icons.notifications,
+            const Color(0xFFF59E0B),
+            () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => KioskAlertsPage(fridgeId: _fridgeId!),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionCard(
+    String title,
+    IconData icon,
+    Color color,
+    VoidCallback onTap,
+  ) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Theme.of(context).colorScheme.outline),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Icon(
+                Icons.arrow_forward_ios,
+                size: 16,
+                color: Theme.of(context).iconTheme.color?.withOpacity(0.5),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
