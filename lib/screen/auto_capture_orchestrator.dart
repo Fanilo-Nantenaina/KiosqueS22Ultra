@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:kiosque_samsung_ultra/service/bluetooth_fridge_service.dart';
 import 'package:kiosque_samsung_ultra/service/auto_capture_service.dart';
 import 'package:kiosque_samsung_ultra/service/api.dart';
+import 'package:kiosque_samsung_ultra/service/scan_mode_service.dart';
 import 'package:kiosque_samsung_ultra/screen/consumption_review.dart';
 import 'package:kiosque_samsung_ultra/screen/vision_scan.dart';
 
@@ -90,9 +91,9 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
       return;
     }
 
-    debugPrint('🚪 ═══════════════════════════════════');
+    debugPrint('🚪 ╔═══════════════════════════════════╗');
     debugPrint('🚪 FRIGO OUVERT - DÉMARRAGE CAPTURE');
-    debugPrint('🚪 ═══════════════════════════════════');
+    debugPrint('🚪 ╚═══════════════════════════════════╝');
 
     _isActive = true;
     _sessionStartTime = DateTime.now();
@@ -104,7 +105,7 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     final success = await captureService.startCaptureSession();
 
     if (success) {
-      debugPrint('Capture démarrée avec succès');
+      debugPrint('✅ Capture démarrée avec succès');
 
       if (context.mounted) {
         await Navigator.push(
@@ -119,7 +120,7 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
         );
       }
     } else {
-      debugPrint('Échec démarrage capture');
+      debugPrint('❌ Échec démarrage capture');
       _isActive = false;
       _currentSessionId = null;
       notifyListeners();
@@ -131,7 +132,7 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
       final stats = captureService.getStats();
       final currentSession = stats['current_session'] as Map<String, dynamic>?;
       final photoCount = currentSession?['photo_count'] ?? 0;
-      debugPrint('💓 Frigo toujours ouvert - $photoCount photos');
+      debugPrint('💚 Frigo toujours ouvert - $photoCount photos');
     }
   }
 
@@ -141,9 +142,9 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
       return;
     }
 
-    debugPrint('🚪 ═══════════════════════════════════');
+    debugPrint('🚪 ╔═══════════════════════════════════╗');
     debugPrint('🚪 FRIGO FERMÉ - ARRÊT CAPTURE');
-    debugPrint('🚪 ═══════════════════════════════════');
+    debugPrint('🚪 ╚═══════════════════════════════════╝');
 
     if (context.mounted) {
       Navigator.of(context).popUntil((route) => route.isFirst);
@@ -336,11 +337,11 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     _isUploading = true;
     notifyListeners();
 
-    debugPrint('═══════════════════════════════════');
+    debugPrint('╔═══════════════════════════════════╗');
     debugPrint(
       'UPLOAD ${_pendingPhotos.length} PHOTOS (${type == SessionType.entry ? "ENTRÉE" : "SORTIE"})',
     );
-    debugPrint('═══════════════════════════════════');
+    debugPrint('╚═══════════════════════════════════╝');
 
     if (type == SessionType.entry) {
       await _uploadForEntry();
@@ -356,22 +357,38 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     int successCount = 0;
     int failCount = 0;
 
+    // NOUVEAU: Accumuler tous les résultats d'analyse
+    List<Map<String, dynamic>> allDetectedProducts = [];
+    int totalItemsAdded = 0;
+    int totalItemsUpdated = 0;
+
     for (int i = 0; i < _pendingPhotos.length; i++) {
       final photo = _pendingPhotos[i];
 
-      debugPrint('Upload photo ${i + 1}/${_pendingPhotos.length}...');
+      debugPrint('📤 Upload photo ${i + 1}/${_pendingPhotos.length}...');
 
       try {
-        await api.analyzeImage(_fridgeId!, photo);
+        final result = await api.analyzeImage(_fridgeId!, photo);
 
         successCount++;
         _totalPhotosUploaded++;
 
-        debugPrint('   Réussi');
+        // NOUVEAU: Accumuler les produits détectés
+        if (result['detected_products'] != null) {
+          final products = result['detected_products'] as List;
+          allDetectedProducts.addAll(
+            products.map((p) => p as Map<String, dynamic>),
+          );
+        }
+
+        totalItemsAdded += (result['items_added'] as int? ?? 0);
+        totalItemsUpdated += (result['items_updated'] as int? ?? 0);
+
+        debugPrint('   ✅ Réussi');
 
         await bluetoothService.notifyPhotoTaken();
       } catch (e) {
-        debugPrint('   Échec: $e');
+        debugPrint('   ❌ Échec: $e');
         failCount++;
         _failedUploads++;
       }
@@ -382,23 +399,45 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     }
 
     debugPrint('Résultat upload ENTRÉE:');
-    debugPrint('   Réussis: $successCount');
-    debugPrint('   Échecs: $failCount');
+    debugPrint('   ✅ Réussis: $successCount');
+    debugPrint('   ❌ Échecs: $failCount');
 
     _totalSessionsProcessed++;
 
     if (successCount > 0) {
-      _showSnackBar(
-        '$successCount photo${successCount > 1 ? 's' : ''} traitée${successCount > 1 ? 's' : ''} - Produits ajoutés',
-        Colors.green,
-      );
-    }
+      // NOUVEAU: Créer un résultat consolidé pour afficher dans VisionScanPage
+      final consolidatedResult = {
+        'detected_count': allDetectedProducts.length,
+        'items_added': totalItemsAdded,
+        'items_updated': totalItemsUpdated,
+        'detected_products': allDetectedProducts,
+        'timestamp': DateTime.now().toIso8601String(),
+      };
 
-    await _cleanupSession();
+      await _cleanupSession();
+
+      // NOUVEAU: Naviguer vers VisionScanPage avec les résultats
+      if (context.mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => VisionScanPage(
+              fridgeId: _fridgeId!,
+              mode: ScanPageMode.resultOnly,
+              precomputedResult: consolidatedResult,
+              forcedScanMode: ScanMode.entry,
+            ),
+          ),
+        );
+      }
+    } else {
+      _showSnackBar('Aucune photo n\'a pu être analysée', Colors.red);
+      await _cleanupSession();
+    }
   }
 
   Future<void> _uploadForExit() async {
-    debugPrint('Mode SORTIE : analyse pour consommation...');
+    debugPrint('🔴 Mode SORTIE : analyse pour consommation...');
 
     final bestPhoto = _pendingPhotos.first;
 
@@ -408,7 +447,7 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
         bestPhoto,
       );
 
-      debugPrint('Analyse consommation réussie');
+      debugPrint('✅ Analyse consommation réussie');
 
       await bluetoothService.notifyPhotoTaken();
 
@@ -433,7 +472,7 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
         }
       }
     } catch (e) {
-      debugPrint('Erreur analyse consommation: $e');
+      debugPrint('❌ Erreur analyse consommation: $e');
       _failedUploads++;
 
       _showSnackBar('Erreur lors de l\'analyse: $e', Colors.red);
@@ -458,7 +497,7 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
   Future<void> _cleanupSession() async {
     if (_currentSessionId == null) return;
 
-    debugPrint(' Nettoyage session: $_currentSessionId');
+    debugPrint('🧹 Nettoyage session: $_currentSessionId');
 
     await captureService.cleanupSessionFiles(_currentSessionId!);
 
@@ -468,13 +507,13 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
     notifyListeners();
 
-    debugPrint('Session nettoyée');
+    debugPrint('✅ Session nettoyée');
   }
 
   Future<void> cancelCurrentSession() async {
     if (!_isActive) return;
 
-    debugPrint('Annulation session en cours');
+    debugPrint('❌ Annulation session en cours');
 
     // Fermer la page de capture
     if (context.mounted) {

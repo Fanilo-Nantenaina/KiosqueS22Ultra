@@ -7,18 +7,24 @@ import 'package:kiosque_samsung_ultra/service/api.dart';
 import 'package:kiosque_samsung_ultra/service/scan_mode_service.dart';
 import 'package:kiosque_samsung_ultra/service/auto_capture_service.dart';
 
-enum ScanPageMode { manual, autoCapture }
+enum ScanPageMode { manual, autoCapture, resultOnly }
 
 class VisionScanPage extends StatefulWidget {
   final int fridgeId;
   final ScanPageMode mode;
   final AutoCaptureService? autoCaptureService;
 
+  // NOUVEAU: Accepter un résultat d'analyse pré-calculé
+  final Map<String, dynamic>? precomputedResult;
+  final ScanMode? forcedScanMode; // Pour forcer entrée ou sortie
+
   const VisionScanPage({
     super.key,
     required this.fridgeId,
     this.mode = ScanPageMode.manual,
     this.autoCaptureService,
+    this.precomputedResult,
+    this.forcedScanMode,
   });
 
   @override
@@ -28,7 +34,9 @@ class VisionScanPage extends StatefulWidget {
 class _VisionScanPageState extends State<VisionScanPage> {
   final ImagePicker _picker = ImagePicker();
   final KioskApiService _api = KioskApiService();
-  ScanMode get _currentMode => ScanModeService().currentMode;
+
+  ScanMode get _currentMode =>
+      widget.forcedScanMode ?? ScanModeService().currentMode;
 
   File? _imageFile;
   bool _isAnalyzing = false;
@@ -41,7 +49,11 @@ class _VisionScanPageState extends State<VisionScanPage> {
   @override
   void initState() {
     super.initState();
-    if (widget.mode == ScanPageMode.autoCapture) {
+
+    // NOUVEAU: Si on a un résultat pré-calculé, l'afficher directement
+    if (widget.precomputedResult != null) {
+      _analysisResult = widget.precomputedResult;
+    } else if (widget.mode == ScanPageMode.autoCapture) {
       _initializeAutoCapture();
     }
   }
@@ -195,6 +207,8 @@ class _VisionScanPageState extends State<VisionScanPage> {
                 Text(
                   widget.mode == ScanPageMode.autoCapture
                       ? 'Auto-Capture - '
+                      : widget.mode == ScanPageMode.resultOnly
+                      ? 'Résultat - '
                       : 'Scanner - ',
                 ),
                 Container(
@@ -211,7 +225,11 @@ class _VisionScanPageState extends State<VisionScanPage> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    ScanModeService().modeLabel,
+                    widget.forcedScanMode != null
+                        ? (widget.forcedScanMode == ScanMode.entry
+                              ? 'Entrée'
+                              : 'Sortie')
+                        : ScanModeService().modeLabel,
                     style: TextStyle(
                       color: _currentMode == ScanMode.entry
                           ? const Color(0xFF10B981)
@@ -226,9 +244,56 @@ class _VisionScanPageState extends State<VisionScanPage> {
           ),
           body: widget.mode == ScanPageMode.autoCapture
               ? _buildAutoCaptureView(isDark)
+              : widget.mode == ScanPageMode.resultOnly
+              ? _buildResultOnlyView(isDark)
               : _buildManualView(isDark),
         );
       },
+    );
+  }
+
+  // NOUVEAU: Vue pour afficher uniquement les résultats (mode auto-capture)
+  Widget _buildResultOnlyView(bool isDark) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_analysisResult != null)
+            _buildResults(isDark)
+          else
+            _buildEmptyResultView(isDark),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyResultView(bool isDark) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: 80,
+              color: isDark
+                  ? Colors.white.withOpacity(0.2)
+                  : Colors.black.withOpacity(0.2),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Aucun résultat disponible',
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -543,7 +608,7 @@ class _VisionScanPageState extends State<VisionScanPage> {
                       style: TextStyle(
                         color: isDark
                             ? Colors.white.withOpacity(0.6)
-                            : const Color(0xFF64748B),
+                            : const Color(0x64748B),
                         fontSize: 15,
                         height: 1.4,
                       ),
