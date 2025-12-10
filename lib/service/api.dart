@@ -39,18 +39,14 @@ class KioskApiService {
         if (existingKiosk != null) {
           debugPrint('🔄 Kiosk existant trouvé: ${existingKiosk['kiosk_id']}');
 
-          // Vérifier si le code est expiré
-          final expiresIn = existingKiosk['expires_in_minutes'];
           final isPaired = existingKiosk['is_paired'] == true;
 
-          if (isPaired || (expiresIn != null && expiresIn > 0)) {
+          if (isPaired) {
             debugPrint('✅ Kiosk valide restauré');
             final prefs = await SharedPreferences.getInstance();
             await prefs.setString('kiosk_id', existingKiosk['kiosk_id']);
             return existingKiosk;
           } else {
-            debugPrint('⚠️ Code expiré, création d\'un nouveau kiosk');
-            // Le code est expiré, on force la création d'un nouveau
             forceNew = true;
           }
         }

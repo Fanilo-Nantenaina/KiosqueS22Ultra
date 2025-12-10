@@ -218,14 +218,16 @@ class _KioskHomePageState extends State<KioskHomePage>
       setState(() {
         _kioskId = initData['kiosk_id'];
         _isPaired = initData['is_paired'] ?? false;
-        _fridgeId = initData['fridge_id'];
-        _fridgeName = initData['fridge_name'];
+        _fridgeId = initData['fridge_id']; // Peut être null si pas pairé
+        _fridgeName = initData['fridge_name']; // Peut être null si pas pairé
 
         if (_isPaired) {
           _pairingCode = null;
+          _remainingSeconds = 0;
         } else {
           _pairingCode = initData['pairing_code'];
-          _remainingSeconds = (initData['expires_in_minutes'] as int) * 60;
+          // 🔧 FIX : Utiliser la méthode safe au lieu du cast direct
+          _remainingSeconds = _safeGetExpirationSeconds(initData);
         }
 
         _isInitializing = false;
@@ -233,6 +235,11 @@ class _KioskHomePageState extends State<KioskHomePage>
 
       if (_isPaired) {
         _startHeartbeat();
+
+        // 🔧 FIX : Initialiser l'orchestrateur seulement si fridgeId existe
+        if (_fridgeId != null && mounted) {
+          _initializeOrchestrator();
+        }
       } else {
         _startCodeExpiration();
         _startHeartbeat();
@@ -244,6 +251,7 @@ class _KioskHomePageState extends State<KioskHomePage>
         _errorMessage = 'Erreur d\'initialisation: ${e.toString()}';
       });
 
+      // Réessayer après 5 secondes
       Future.delayed(const Duration(seconds: 5), () {
         if (mounted && !_isPaired) {
           _checkExistingKiosk();
