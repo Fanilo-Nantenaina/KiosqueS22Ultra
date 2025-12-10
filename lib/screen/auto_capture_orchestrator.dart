@@ -5,10 +5,7 @@ import 'package:kiosque_samsung_ultra/service/bluetooth_fridge_service.dart';
 import 'package:kiosque_samsung_ultra/service/auto_capture_service.dart';
 import 'package:kiosque_samsung_ultra/service/api.dart';
 import 'package:kiosque_samsung_ultra/screen/consumption_review.dart';
-
-/// ═══════════════════════════════════════════════════════════
-/// ORCHESTRATEUR AUTO-CAPTURE avec choix Entrée/Sortie
-/// ═══════════════════════════════════════════════════════════
+import 'package:kiosque_samsung_ultra/screen/vision_scan.dart';
 
 enum SessionType { entry, exit }
 
@@ -16,7 +13,7 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
   final BluetoothFridgeService bluetoothService;
   final AutoCaptureService captureService;
   final KioskApiService api;
-  final BuildContext context; // Pour afficher le dialogue
+  final BuildContext context;
 
   AutoCaptureOrchestrator({
     required this.bluetoothService,
@@ -27,58 +24,44 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
   StreamSubscription? _eventSubscription;
 
-  // État global
   bool _isActive = false;
   bool _isUploading = false;
-  bool _isWaitingUserChoice = false; // NOUVEAU
+  bool _isWaitingUserChoice = false;
   int? _fridgeId;
 
-  // Session courante
   String? _currentSessionId;
   List<File> _pendingPhotos = [];
   DateTime? _sessionStartTime;
 
-  // Statistiques
   int _totalSessionsProcessed = 0;
   int _totalPhotosUploaded = 0;
   int _failedUploads = 0;
 
-  // ═══════════ GETTERS ═══════════
   bool get isActive => _isActive;
   bool get isUploading => _isUploading;
   bool get isWaitingUserChoice => _isWaitingUserChoice;
   bool get hasSession => _currentSessionId != null;
   int get pendingPhotoCount => _pendingPhotos.length;
 
-  // ═══════════════════════════════════════════════════════
-  // INITIALISATION
-  // ═══════════════════════════════════════════════════════
-
   Future<void> init(int fridgeId) async {
     _fridgeId = fridgeId;
 
-    debugPrint(
-      '🎯 AutoCaptureOrchestrator: Initialisation pour frigo #$fridgeId',
-    );
+    debugPrint('AutoCaptureOrchestrator: Initialisation pour frigo #$fridgeId');
 
     _subscribeToBluetoothEvents();
-    debugPrint('✅ Orchestrateur prêt');
+    debugPrint('Orchestrateur prêt');
   }
 
   void _subscribeToBluetoothEvents() {
     _eventSubscription = bluetoothService.eventStream.listen(
       _handleFridgeEvent,
       onError: (error) {
-        debugPrint('❌ Erreur stream Bluetooth: $error');
+        debugPrint('Erreur stream Bluetooth: $error');
       },
     );
 
-    debugPrint('👂 Écoute des événements Bluetooth activée');
+    debugPrint('Écoute des événements Bluetooth activée');
   }
-
-  // ═══════════════════════════════════════════════════════
-  // GESTION DES ÉVÉNEMENTS FRIGO
-  // ═══════════════════════════════════════════════════════
 
   Future<void> _handleFridgeEvent(FridgeEventData event) async {
     debugPrint('📨 Événement reçu: ${event.event}');
@@ -101,13 +84,9 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // OUVERTURE DU FRIGO
-  // ═══════════════════════════════════════════════════════
-
   Future<void> _onFridgeOpened() async {
     if (_isActive) {
-      debugPrint('⚠️ Session déjà active, ignoré');
+      debugPrint('Session déjà active, ignoré');
       return;
     }
 
@@ -125,9 +104,22 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     final success = await captureService.startCaptureSession();
 
     if (success) {
-      debugPrint('✅ Capture démarrée avec succès');
+      debugPrint('Capture démarrée avec succès');
+
+      if (context.mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => VisionScanPage(
+              fridgeId: _fridgeId!,
+              mode: ScanPageMode.autoCapture,
+              autoCaptureService: captureService,
+            ),
+          ),
+        );
+      }
     } else {
-      debugPrint('❌ Échec démarrage capture');
+      debugPrint('Échec démarrage capture');
       _isActive = false;
       _currentSessionId = null;
       notifyListeners();
@@ -143,13 +135,9 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // FERMETURE DU FRIGO
-  // ═══════════════════════════════════════════════════════
-
   Future<void> _onFridgeClosed(Map<String, dynamic>? data) async {
     if (!_isActive) {
-      debugPrint('⚠️ Pas de session active, ignoré');
+      debugPrint('Pas de session active, ignoré');
       return;
     }
 
@@ -157,7 +145,10 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     debugPrint('🚪 FRIGO FERMÉ - ARRÊT CAPTURE');
     debugPrint('🚪 ═══════════════════════════════════');
 
-    // Arrêter la capture
+    if (context.mounted) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
+
     _pendingPhotos = await captureService.stopCaptureSession();
 
     final photoCount = _pendingPhotos.length;
@@ -165,42 +156,33 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
         ? DateTime.now().difference(_sessionStartTime!).inSeconds
         : 0;
 
-    debugPrint('📊 Session terminée:');
+    debugPrint('Session terminée:');
     debugPrint('   - Photos: $photoCount');
     debugPrint('   - Durée: ${duration}s');
 
     _isActive = false;
     notifyListeners();
 
-    // ═══════════════════════════════════════════════════════
-    // 🎯 NOUVEAU : Demander le type de session à l'utilisateur
-    // ═══════════════════════════════════════════════════════
-
     if (_pendingPhotos.isEmpty) {
-      debugPrint('ℹ️ Aucune photo à traiter');
+      debugPrint('Aucune photo à traiter');
       _cleanupSession();
       return;
     }
 
-    // Afficher le dialogue modal
     final sessionType = await _showSessionTypeDialog();
 
     if (sessionType == null) {
-      // Ne devrait jamais arriver (dialogue unskippable)
-      debugPrint('⚠️ Aucun choix fait, annulation');
+      debugPrint('Aucun choix fait, annulation');
       _cleanupSession();
       return;
     }
 
-    // Uploader selon le type choisi
     await _uploadPhotos(sessionType);
   }
 
-  // ═══════════════════════════════════════════════════════
-  // 🆕 DIALOGUE MODAL POUR CHOISIR LE TYPE
-  // ═══════════════════════════════════════════════════════
-
   Future<SessionType?> _showSessionTypeDialog() async {
+    if (!context.mounted) return null;
+
     _isWaitingUserChoice = true;
     notifyListeners();
 
@@ -208,10 +190,10 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
     final result = await showDialog<SessionType>(
       context: context,
-      barrierDismissible: false, // UNSKIPPABLE
+      barrierDismissible: false,
       builder: (BuildContext dialogContext) {
         return WillPopScope(
-          onWillPop: () async => false, // Empêche le back button
+          onWillPop: () async => false,
           child: Dialog(
             backgroundColor: Colors.transparent,
             child: Container(
@@ -225,7 +207,6 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Icône
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
@@ -241,7 +222,6 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
                   const SizedBox(height: 24),
 
-                  // Titre
                   Text(
                     'Type d\'opération',
                     style: TextStyle(
@@ -255,7 +235,6 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
                   const SizedBox(height: 12),
 
-                  // Description
                   Text(
                     '${_pendingPhotos.length} photo${_pendingPhotos.length > 1 ? 's' : ''} capturée${_pendingPhotos.length > 1 ? 's' : ''}.\nAvez-vous ajouté ou retiré des produits ?',
                     textAlign: TextAlign.center,
@@ -270,7 +249,6 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
                   const SizedBox(height: 32),
 
-                  // Bouton ENTRÉE
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -292,7 +270,6 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
                   const SizedBox(height: 12),
 
-                  // Bouton SORTIE
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -314,7 +291,6 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
                   const SizedBox(height: 16),
 
-                  // Bouton annuler (optionnel)
                   TextButton(
                     onPressed: () {
                       Navigator.of(dialogContext).pop(null);
@@ -339,24 +315,20 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     _isWaitingUserChoice = false;
     notifyListeners();
 
-    debugPrint('✅ Choix fait: ${result?.toString() ?? "Annulé"}');
+    debugPrint('Choix fait: ${result?.toString() ?? "Annulé"}');
 
     return result;
   }
 
-  // ═══════════════════════════════════════════════════════
-  // UPLOAD DES PHOTOS (modifié)
-  // ═══════════════════════════════════════════════════════
-
   Future<void> _uploadPhotos(SessionType type) async {
     if (_fridgeId == null) {
-      debugPrint('❌ Pas de fridgeId configuré');
+      debugPrint('Pas de fridgeId configuré');
       _cleanupSession();
       return;
     }
 
     if (_pendingPhotos.isEmpty) {
-      debugPrint('ℹ️ Aucune photo à uploader');
+      debugPrint('Aucune photo à uploader');
       _cleanupSession();
       return;
     }
@@ -364,21 +336,15 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     _isUploading = true;
     notifyListeners();
 
-    debugPrint('📤 ═══════════════════════════════════');
+    debugPrint('═══════════════════════════════════');
     debugPrint(
-      '📤 UPLOAD ${_pendingPhotos.length} PHOTOS (${type == SessionType.entry ? "ENTRÉE" : "SORTIE"})',
+      'UPLOAD ${_pendingPhotos.length} PHOTOS (${type == SessionType.entry ? "ENTRÉE" : "SORTIE"})',
     );
-    debugPrint('📤 ═══════════════════════════════════');
+    debugPrint('═══════════════════════════════════');
 
     if (type == SessionType.entry) {
-      // ═══════════════════════════════════════════════════
-      // MODE ENTRÉE : Ajout automatique
-      // ═══════════════════════════════════════════════════
       await _uploadForEntry();
     } else {
-      // ═══════════════════════════════════════════════════
-      // MODE SORTIE : Analyse + Revue manuelle
-      // ═══════════════════════════════════════════════════
       await _uploadForExit();
     }
 
@@ -386,7 +352,6 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Upload pour ENTRÉE : analyse et ajout automatique
   Future<void> _uploadForEntry() async {
     int successCount = 0;
     int failCount = 0;
@@ -394,7 +359,7 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     for (int i = 0; i < _pendingPhotos.length; i++) {
       final photo = _pendingPhotos[i];
 
-      debugPrint('📤 Upload photo ${i + 1}/${_pendingPhotos.length}...');
+      debugPrint('Upload photo ${i + 1}/${_pendingPhotos.length}...');
 
       try {
         await api.analyzeImage(_fridgeId!, photo);
@@ -402,11 +367,11 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
         successCount++;
         _totalPhotosUploaded++;
 
-        debugPrint('   ✅ Réussi');
+        debugPrint('   Réussi');
 
         await bluetoothService.notifyPhotoTaken();
       } catch (e) {
-        debugPrint('   ❌ Échec: $e');
+        debugPrint('   Échec: $e');
         failCount++;
         _failedUploads++;
       }
@@ -416,16 +381,15 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
       }
     }
 
-    debugPrint('📊 Résultat upload ENTRÉE:');
-    debugPrint('   ✅ Réussis: $successCount');
-    debugPrint('   ❌ Échecs: $failCount');
+    debugPrint('Résultat upload ENTRÉE:');
+    debugPrint('   Réussis: $successCount');
+    debugPrint('   Échecs: $failCount');
 
     _totalSessionsProcessed++;
 
-    // Afficher notification de succès
     if (successCount > 0) {
       _showSnackBar(
-        '✅ $successCount photo${successCount > 1 ? 's' : ''} traitée${successCount > 1 ? 's' : ''} - Produits ajoutés',
+        '$successCount photo${successCount > 1 ? 's' : ''} traitée${successCount > 1 ? 's' : ''} - Produits ajoutés',
         Colors.green,
       );
     }
@@ -433,29 +397,24 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     await _cleanupSession();
   }
 
-  /// Upload pour SORTIE : analyse puis navigation vers revue
   Future<void> _uploadForExit() async {
-    debugPrint('🔄 Mode SORTIE : analyse pour consommation...');
+    debugPrint('Mode SORTIE : analyse pour consommation...');
 
-    // Prendre la première photo la plus claire (ou fusionner)
     final bestPhoto = _pendingPhotos.first;
 
     try {
-      // Analyser pour la consommation
       final analysisResult = await api.analyzeImageForConsumption(
         _fridgeId!,
         bestPhoto,
       );
 
-      debugPrint('✅ Analyse consommation réussie');
+      debugPrint('Analyse consommation réussie');
 
-      // Notifier Arduino
       await bluetoothService.notifyPhotoTaken();
 
       _totalSessionsProcessed++;
       _totalPhotosUploaded++;
 
-      // Navigation vers la page de revue
       await _cleanupSession();
 
       if (context.mounted) {
@@ -470,22 +429,18 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
         );
 
         if (confirmed == true) {
-          _showSnackBar('✅ Produits retirés avec succès', Colors.green);
+          _showSnackBar('Produits retirés avec succès', Colors.green);
         }
       }
     } catch (e) {
-      debugPrint('❌ Erreur analyse consommation: $e');
+      debugPrint('Erreur analyse consommation: $e');
       _failedUploads++;
 
-      _showSnackBar('❌ Erreur lors de l\'analyse: $e', Colors.red);
+      _showSnackBar('Erreur lors de l\'analyse: $e', Colors.red);
 
       await _cleanupSession();
     }
   }
-
-  // ═══════════════════════════════════════════════════════
-  // UTILITAIRES UI
-  // ═══════════════════════════════════════════════════════
 
   void _showSnackBar(String message, Color backgroundColor) {
     if (context.mounted) {
@@ -500,14 +455,10 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // NETTOYAGE
-  // ═══════════════════════════════════════════════════════
-
   Future<void> _cleanupSession() async {
     if (_currentSessionId == null) return;
 
-    debugPrint('🗑️ Nettoyage session: $_currentSessionId');
+    debugPrint(' Nettoyage session: $_currentSessionId');
 
     await captureService.cleanupSessionFiles(_currentSessionId!);
 
@@ -517,17 +468,18 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
     notifyListeners();
 
-    debugPrint('✅ Session nettoyée');
+    debugPrint('Session nettoyée');
   }
-
-  // ═══════════════════════════════════════════════════════
-  // CONTRÔLES MANUELS
-  // ═══════════════════════════════════════════════════════
 
   Future<void> cancelCurrentSession() async {
     if (!_isActive) return;
 
-    debugPrint('❌ Annulation session en cours');
+    debugPrint('Annulation session en cours');
+
+    // Fermer la page de capture
+    if (context.mounted) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
 
     await captureService.stopCaptureSession();
 
@@ -536,10 +488,6 @@ class AutoCaptureOrchestrator extends ChangeNotifier {
 
     notifyListeners();
   }
-
-  // ═══════════════════════════════════════════════════════
-  // STATISTIQUES
-  // ═══════════════════════════════════════════════════════
 
   Map<String, dynamic> getStats() {
     return {

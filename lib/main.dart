@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kiosque_samsung_ultra/screen/auto_capture_indicator.dart';
 import 'package:kiosque_samsung_ultra/screen/bluetooth_setup.dart';
-import 'package:kiosque_samsung_ultra/service/auto_capture_orchestrator.dart';
+import 'package:kiosque_samsung_ultra/screen/auto_capture_orchestrator.dart';
 import 'package:kiosque_samsung_ultra/service/auto_capture_service.dart';
 import 'package:kiosque_samsung_ultra/service/bluetooth_fridge_service.dart';
 import 'package:provider/provider.dart';
@@ -21,7 +21,6 @@ void main() async {
 
   await ThemeSwitcher().init();
 
-  // Initialiser services Auto-Capture
   final bluetoothService = BluetoothFridgeService();
   final captureService = AutoCaptureService();
   final api = KioskApiService();
@@ -150,7 +149,7 @@ class _KioskHomePageState extends State<KioskHomePage>
 
       if (expiresIn == null) {
         debugPrint(
-          '⚠️ expires_in_minutes est null, utilisation de 5 min par défaut',
+          'expires_in_minutes est null, utilisation de 5 min par défaut',
         );
         return 300;
       }
@@ -171,11 +170,11 @@ class _KioskHomePageState extends State<KioskHomePage>
       }
 
       debugPrint(
-        '⚠️ Type inattendu pour expires_in_minutes: ${expiresIn.runtimeType}',
+        'Type inattendu pour expires_in_minutes: ${expiresIn.runtimeType}',
       );
       return 300;
     } catch (e) {
-      debugPrint('❌ Erreur lors de l\'extraction de expires_in_minutes: $e');
+      debugPrint('Erreur lors de l\'extraction de expires_in_minutes: $e');
       return 300;
     }
   }
@@ -200,7 +199,7 @@ class _KioskHomePageState extends State<KioskHomePage>
     });
 
     debugPrint(
-      '📱 Kiosk initialisé: ID=$_kioskId, Paired=$_isPaired, Code=$_pairingCode',
+      'Kiosk initialisé: ID=$_kioskId, Paired=$_isPaired, Code=$_pairingCode',
     );
   }
 
@@ -218,15 +217,14 @@ class _KioskHomePageState extends State<KioskHomePage>
       setState(() {
         _kioskId = initData['kiosk_id'];
         _isPaired = initData['is_paired'] ?? false;
-        _fridgeId = initData['fridge_id']; // Peut être null si pas pairé
-        _fridgeName = initData['fridge_name']; // Peut être null si pas pairé
+        _fridgeId = initData['fridge_id'];
+        _fridgeName = initData['fridge_name'];
 
         if (_isPaired) {
           _pairingCode = null;
           _remainingSeconds = 0;
         } else {
           _pairingCode = initData['pairing_code'];
-          // 🔧 FIX : Utiliser la méthode safe au lieu du cast direct
           _remainingSeconds = _safeGetExpirationSeconds(initData);
         }
 
@@ -236,7 +234,6 @@ class _KioskHomePageState extends State<KioskHomePage>
       if (_isPaired) {
         _startHeartbeat();
 
-        // 🔧 FIX : Initialiser l'orchestrateur seulement si fridgeId existe
         if (_fridgeId != null && mounted) {
           _initializeOrchestrator();
         }
@@ -251,7 +248,6 @@ class _KioskHomePageState extends State<KioskHomePage>
         _errorMessage = 'Erreur d\'initialisation: ${e.toString()}';
       });
 
-      // Réessayer après 5 secondes
       Future.delayed(const Duration(seconds: 5), () {
         if (mounted && !_isPaired) {
           _checkExistingKiosk();
@@ -260,7 +256,6 @@ class _KioskHomePageState extends State<KioskHomePage>
     }
   }
 
-  /// Initialiser l'orchestrateur avec le context
   void _initializeOrchestrator() {
     if (_fridgeId == null || _orchestrator != null) return;
 
@@ -273,13 +268,11 @@ class _KioskHomePageState extends State<KioskHomePage>
 
     _orchestrator!.init(_fridgeId!);
 
-    debugPrint(
-      '🎯 Auto-capture orchestrator initialisé pour frigo #$_fridgeId',
-    );
+    debugPrint('Auto-capture orchestrator initialisé pour frigo #$_fridgeId');
   }
 
   Future<void> _regenerateCode() async {
-    debugPrint('🔄 Régénération du code demandée...');
+    debugPrint('Régénération du code demandée...');
 
     _codeExpirationTimer?.cancel();
     _statusCheckTimer?.cancel();
@@ -294,11 +287,11 @@ class _KioskHomePageState extends State<KioskHomePage>
 
     try {
       if (_kioskId != null) {
-        debugPrint('🗑️ Suppression de l\'ancien kiosk: $_kioskId');
+        debugPrint(' Suppression de l\'ancien kiosk: $_kioskId');
         try {
           await _api.clearKioskId();
         } catch (e) {
-          debugPrint('⚠️ Erreur suppression (ignorée): $e');
+          debugPrint('Erreur suppression (ignorée): $e');
         }
       }
 
@@ -309,7 +302,7 @@ class _KioskHomePageState extends State<KioskHomePage>
         forceNew: true,
       );
 
-      debugPrint('✅ Nouveau code reçu: $initData');
+      debugPrint('Nouveau code reçu: $initData');
 
       _applyInitData(initData, isPaired: false);
 
@@ -321,7 +314,7 @@ class _KioskHomePageState extends State<KioskHomePage>
         _showSuccess('Nouveau code généré avec succès');
       }
     } catch (e, stackTrace) {
-      debugPrint('❌ Erreur lors de la régénération: $e');
+      debugPrint('Erreur lors de la régénération: $e');
       debugPrint('Stack trace: $stackTrace');
 
       setState(() {
@@ -369,13 +362,12 @@ class _KioskHomePageState extends State<KioskHomePage>
             _codeExpirationTimer?.cancel();
             _showSuccess('Kiosk pairé avec succès !');
 
-            // Initialiser auto-capture après pairing
             if (_fridgeId != null && mounted) {
               _initializeOrchestrator();
             }
           }
         } catch (e) {
-          debugPrint('⚠️ Erreur polling (ignorée): $e');
+          debugPrint('Erreur polling (ignorée): $e');
         }
       }
     });
@@ -385,7 +377,7 @@ class _KioskHomePageState extends State<KioskHomePage>
     _codeExpirationTimer?.cancel();
 
     if (_remainingSeconds <= 0) {
-      debugPrint('⚠️ Aucun temps restant, timer non démarré');
+      debugPrint('Aucun temps restant, timer non démarré');
       return;
     }
 
@@ -790,7 +782,6 @@ class _KioskHomePageState extends State<KioskHomePage>
 
     return Column(
       children: [
-        // Indicateur auto-capture
         ListenableBuilder(
           listenable: _orchestrator!,
           builder: (context, _) {

@@ -1,15 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
-import 'package:kiosque_samsung_ultra/screen/bluetooth_debug.dart';
 import 'package:kiosque_samsung_ultra/service/bluetooth_fridge_service.dart';
 import 'package:kiosque_samsung_ultra/service/auto_capture_service.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
-
-/// ═══════════════════════════════════════════════════════════
-/// Page de configuration Bluetooth et Auto-Capture
-/// Permet de connecter l'Arduino et configurer la capture auto
-/// ═══════════════════════════════════════════════════════════
 
 class BluetoothSetupPage extends StatefulWidget {
   const BluetoothSetupPage({super.key});
@@ -21,7 +15,7 @@ class BluetoothSetupPage extends StatefulWidget {
 class _BluetoothSetupPageState extends State<BluetoothSetupPage>
     with SingleTickerProviderStateMixin {
   List<BluetoothDevice> _bondedDevices = [];
-  List<BluetoothDiscoveryResult> _discoveredDevices = [];
+  final List<BluetoothDiscoveryResult> _discoveredDevices = [];
   bool _isScanning = false;
   bool _bluetoothEnabled = false;
   StreamSubscription<BluetoothDiscoveryResult>? _discoverySubscription;
@@ -58,7 +52,6 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
     setState(() => _isScanning = true);
 
     try {
-      // 1. Charger les devices appairés
       final bluetoothService = context.read<BluetoothFridgeService>();
       final bonded = await bluetoothService.getAvailableDevices();
 
@@ -66,9 +59,8 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
         _bondedDevices = bonded;
       });
 
-      debugPrint('📱 ${bonded.length} devices appairés');
+      debugPrint('${bonded.length} devices appairés');
 
-      // 2. Lancer le scan pour découvrir de nouveaux appareils
       await _startDiscovery();
     } catch (e) {
       setState(() => _isScanning = false);
@@ -76,9 +68,7 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
     }
   }
 
-  /// 🆕 SCAN POUR DÉCOUVRIR DE NOUVEAUX PÉRIPHÉRIQUES
   Future<void> _startDiscovery() async {
-    // Annuler le scan précédent
     await _discoverySubscription?.cancel();
 
     setState(() {
@@ -97,7 +87,6 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
             );
 
             setState(() {
-              // Éviter les doublons
               final existingIndex = _discoveredDevices.indexWhere(
                 (r) => r.device.address == result.device.address,
               );
@@ -110,12 +99,11 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
             });
           });
 
-      // Arrêter le scan après 12 secondes
       Future.delayed(const Duration(seconds: 12), () {
         _stopDiscovery();
       });
     } catch (e) {
-      debugPrint('❌ Erreur scan: $e');
+      debugPrint('Erreur scan: $e');
       setState(() => _isScanning = false);
       _showError('Erreur scan: $e');
     }
@@ -124,7 +112,7 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
   void _stopDiscovery() {
     _discoverySubscription?.cancel();
     setState(() => _isScanning = false);
-    debugPrint('🛑 Scan terminé');
+    debugPrint('can terminé');
   }
 
   Future<void> _connectToDevice(BluetoothDevice device) async {
@@ -133,7 +121,6 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
     try {
       final bluetoothService = context.read<BluetoothFridgeService>();
 
-      // Vérifier si c'est un appareil compatible (HC-05, HC-06, etc.)
       if (!_isCompatibleDevice(device)) {
         Navigator.pop(context);
         _showWarning(
@@ -154,7 +141,6 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
     }
   }
 
-  /// Vérifie si l'appareil semble être un module Bluetooth compatible
   bool _isCompatibleDevice(BluetoothDevice device) {
     final name = (device.name ?? '').toUpperCase();
     return name.contains('HC-') ||
@@ -162,7 +148,7 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
         name.contains('BT') ||
         name == 'HC-05' ||
         name == 'HC-06' ||
-        name.isEmpty; // HC-05 non configuré
+        name.isEmpty;
   }
 
   Future<void> _attemptConnection(
@@ -173,7 +159,7 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
       final success = await bluetoothService.connectToDevice(device);
 
       if (mounted) {
-        Navigator.pop(context); // Fermer loading
+        Navigator.pop(context);
 
         if (success) {
           _showSuccess('Connecté à ${device.name ?? device.address}');
@@ -188,7 +174,6 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
       if (mounted) {
         Navigator.pop(context);
 
-        // Erreurs spécifiques
         if (e.toString().contains('read failed')) {
           _showError(
             'Connexion refusée par l\'appareil.\n'
@@ -280,16 +265,15 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [_buildBluetoothTab(isDark), _buildSettingsTab(isDark)],
+      body: SafeArea(
+        bottom: true,
+        child: TabBarView(
+          controller: _tabController,
+          children: [_buildBluetoothTab(isDark), _buildSettingsTab(isDark)],
+        ),
       ),
     );
   }
-
-  // ═══════════════════════════════════════════════════════
-  // TAB 1: BLUETOOTH
-  // ═══════════════════════════════════════════════════════
 
   Widget _buildBluetoothTab(bool isDark) {
     return SingleChildScrollView(
@@ -297,26 +281,10 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // État Bluetooth
           _buildBluetoothStatusCard(isDark),
-
           const SizedBox(height: 24),
-
-          // État connexion
           _buildConnectionStatusCard(isDark),
-
           const SizedBox(height: 24),
-
-          // 🆕 PANNEAU DE DEBUG (AJOUTÉ ICI)
-          Consumer<BluetoothFridgeService>(
-            builder: (context, bluetoothService, _) {
-              return BluetoothDebugPanel(bluetoothService: bluetoothService);
-            },
-          ),
-
-          const SizedBox(height: 24),
-
-          // Liste des devices
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -351,7 +319,6 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
 
           const SizedBox(height: 12),
 
-          // Appareils appairés
           if (_bondedDevices.isNotEmpty) ...[
             Row(
               children: [
@@ -374,7 +341,6 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
             const SizedBox(height: 16),
           ],
 
-          // Appareils découverts
           if (_discoveredDevices.isNotEmpty) ...[
             Row(
               children: [
@@ -406,7 +372,6 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
             const SizedBox(height: 16),
           ],
 
-          // État vide
           if (!_isScanning &&
               _bondedDevices.isEmpty &&
               _discoveredDevices.isEmpty)
@@ -414,7 +379,6 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
 
           const SizedBox(height: 24),
 
-          // Instructions
           _buildInstructionsCard(isDark),
         ],
       ),
@@ -799,10 +763,10 @@ class _BluetoothSetupPageState extends State<BluetoothSetupPage>
   }
 
   Color _getSignalColor(int rssi) {
-    if (rssi >= -50) return const Color(0xFF10B981); // Excellent
-    if (rssi >= -60) return const Color(0xFF3B82F6); // Bon
-    if (rssi >= -70) return const Color(0xFFF59E0B); // Moyen
-    return const Color(0xFFEF4444); // Faible
+    if (rssi >= -50) return const Color(0xFF10B981);
+    if (rssi >= -60) return const Color(0xFF3B82F6);
+    if (rssi >= -70) return const Color(0xFFF59E0B);
+    return const Color(0xFFEF4444);
   }
 
   Widget _buildEmptyDevicesList(bool isDark) {

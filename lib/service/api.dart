@@ -22,27 +22,24 @@ class KioskApiService {
     return {'Content-Type': 'application/json', 'X-Kiosk-ID': kioskId};
   }
 
-  /// Initialise ou récupère un kiosk
-  /// Si forceNew = true, génère toujours un nouveau kiosk
   Future<Map<String, dynamic>> initKiosk({
     String? deviceName,
     bool forceNew = false,
   }) async {
     try {
       final deviceId = await _deviceIdService.getDeviceId();
-      debugPrint('📱 Device ID: $deviceId');
+      debugPrint('Device ID: $deviceId');
 
-      // Si forceNew = false, on essaie de récupérer un kiosk existant
       if (!forceNew) {
         final existingKiosk = await _checkExistingDevice(deviceId);
 
         if (existingKiosk != null) {
-          debugPrint('🔄 Kiosk existant trouvé: ${existingKiosk['kiosk_id']}');
+          debugPrint('Kiosk existant trouvé: ${existingKiosk['kiosk_id']}');
 
           final isPaired = existingKiosk['is_paired'] == true;
 
           if (isPaired) {
-            debugPrint('✅ Kiosk valide restauré');
+            debugPrint('Kiosk valide restauré');
             final prefs = await SharedPreferences.getInstance();
             await prefs.setString('kiosk_id', existingKiosk['kiosk_id']);
             return existingKiosk;
@@ -52,8 +49,7 @@ class KioskApiService {
         }
       }
 
-      // Création d'un nouveau kiosk
-      debugPrint('🆕 Création d\'un nouveau kiosk...');
+      debugPrint('Création d\'un nouveau kiosk...');
 
       final body = <String, dynamic>{
         'device_id': forceNew
@@ -65,7 +61,7 @@ class KioskApiService {
         body['device_name'] = deviceName;
       }
 
-      debugPrint('📤 Body envoyé: $body');
+      debugPrint('Body envoyé: $body');
 
       final response = await http
           .post(
@@ -75,8 +71,8 @@ class KioskApiService {
           )
           .timeout(timeout);
 
-      debugPrint('📥 Response status: ${response.statusCode}');
-      debugPrint('📥 Response body: ${response.body}');
+      debugPrint('Response status: ${response.statusCode}');
+      debugPrint('Response body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -84,8 +80,8 @@ class KioskApiService {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('kiosk_id', data['kiosk_id']);
 
-        debugPrint('✅ Nouveau kiosk créé: ${data['kiosk_id']}');
-        debugPrint('🔑 Code: ${data['pairing_code']}');
+        debugPrint('Nouveau kiosk créé: ${data['kiosk_id']}');
+        debugPrint('Code: ${data['pairing_code']}');
 
         return data;
       } else {
@@ -98,10 +94,9 @@ class KioskApiService {
     }
   }
 
-  /// Génère un nouveau code pour un kiosk existant
   Future<Map<String, dynamic>> regeneratePairingCode(String kioskId) async {
     try {
-      debugPrint('🔄 Régénération du code pour kiosk: $kioskId');
+      debugPrint('Régénération du code pour kiosk: $kioskId');
 
       final response = await http
           .post(
@@ -110,11 +105,11 @@ class KioskApiService {
           )
           .timeout(timeout);
 
-      debugPrint('📥 Regenerate response: ${response.statusCode}');
+      debugPrint('Regenerate response: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        debugPrint('✅ Nouveau code: ${data['pairing_code']}');
+        debugPrint('Nouveau code: ${data['pairing_code']}');
         return data;
       } else if (response.statusCode == 404) {
         throw Exception('Kiosk non trouvé');
@@ -143,7 +138,7 @@ class KioskApiService {
         throw Exception('Erreur ${response.statusCode}');
       }
     } catch (e) {
-      debugPrint('⚠️ Erreur lors de la vérification du device: $e');
+      debugPrint('Erreur lors de la vérification du device: $e');
       return null;
     }
   }
@@ -190,7 +185,7 @@ class KioskApiService {
   Future<void> clearKioskId() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('kiosk_id');
-    debugPrint('🗑️ Kiosk ID supprimé du stockage local');
+    debugPrint(' Kiosk ID supprimé du stockage local');
   }
 
   Future<List<dynamic>> getInventory(int fridgeId) async {

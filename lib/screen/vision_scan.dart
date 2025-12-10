@@ -1,14 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:camera/camera.dart';
 import 'package:kiosque_samsung_ultra/screen/consumption_review.dart';
 import 'dart:io';
 import 'package:kiosque_samsung_ultra/service/api.dart';
 import 'package:kiosque_samsung_ultra/service/scan_mode_service.dart';
+import 'package:kiosque_samsung_ultra/service/auto_capture_service.dart';
+
+enum ScanPageMode { manual, autoCapture }
 
 class VisionScanPage extends StatefulWidget {
   final int fridgeId;
+  final ScanPageMode mode;
+  final AutoCaptureService? autoCaptureService;
 
-  const VisionScanPage({super.key, required this.fridgeId});
+  const VisionScanPage({
+    super.key,
+    required this.fridgeId,
+    this.mode = ScanPageMode.manual,
+    this.autoCaptureService,
+  });
 
   @override
   State<VisionScanPage> createState() => _VisionScanPageState();
@@ -22,6 +33,45 @@ class _VisionScanPageState extends State<VisionScanPage> {
   File? _imageFile;
   bool _isAnalyzing = false;
   Map<String, dynamic>? _analysisResult;
+
+  // Auto-capture
+  CameraController? _cameraController;
+  bool _isCameraInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.mode == ScanPageMode.autoCapture) {
+      _initializeAutoCapture();
+    }
+  }
+
+  @override
+  void dispose() {
+    if (widget.mode != ScanPageMode.autoCapture) {
+      _cameraController?.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _initializeAutoCapture() async {
+    if (widget.autoCaptureService == null) return;
+
+    if (widget.autoCaptureService!.isCameraReady) {
+      setState(() {
+        _cameraController = widget.autoCaptureService!.cameraController;
+        _isCameraInitialized = true;
+      });
+    } else {
+      final success = await widget.autoCaptureService!.initializeCamera();
+      if (success && mounted) {
+        setState(() {
+          _cameraController = widget.autoCaptureService!.cameraController;
+          _isCameraInitialized = true;
+        });
+      }
+    }
+  }
 
   Future<void> _takePhoto() async {
     try {
@@ -142,7 +192,11 @@ class _VisionScanPageState extends State<VisionScanPage> {
           appBar: AppBar(
             title: Row(
               children: [
-                Text('Scanner - '),
+                Text(
+                  widget.mode == ScanPageMode.autoCapture
+                      ? 'Auto-Capture - '
+                      : 'Scanner - ',
+                ),
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -170,29 +224,230 @@ class _VisionScanPageState extends State<VisionScanPage> {
               ],
             ),
           ),
-          body: Column(
+          body: widget.mode == ScanPageMode.autoCapture
+              ? _buildAutoCaptureView(isDark)
+              : _buildManualView(isDark),
+        );
+      },
+    );
+  }
+
+  Widget _buildAutoCaptureView(bool isDark) {
+    if (!_isCameraInitialized || _cameraController == null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 24),
+            Text(
+              'Initialisation caméra...',
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        if (widget.autoCaptureService != null)
+          ListenableBuilder(
+            listenable: widget.autoCaptureService!,
+            builder: (context, _) {
+              final stats = widget.autoCaptureService!.getStats();
+              final currentSession =
+                  stats['current_session'] as Map<String, dynamic>?;
+
+              if (currentSession == null) {
+                return const SizedBox.shrink();
+              }
+
+              final photoCount = currentSession['photo_count'] as int;
+              final durationSec = currentSession['duration_seconds'] as int;
+              final maxPhotos = widget.autoCaptureService!.maxPhotos;
+
+              return Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      const Color(0xFF3B82F6).withOpacity(0.2),
+                      Colors.transparent,
+                    ],
+                  ),
+                  border: Border(
+                    bottom: BorderSide(
+                      color: const Color(0xFF3B82F6).withOpacity(0.3),
+                    ),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.red.withOpacity(0.5),
+                            blurRadius: 8,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Capture en cours',
+                            style: TextStyle(
+                              color: isDark ? Colors.white : Colors.black87,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '$photoCount/$maxPhotos photos • ${durationSec}s',
+                            style: TextStyle(
+                              color: isDark ? Colors.white70 : Colors.black54,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.photo_camera,
+                            size: 16,
+                            color: Color(0xFF10B981),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '$photoCount',
+                            style: const TextStyle(
+                              color: Color(0xFF10B981),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+
+        Expanded(
+          child: Stack(
             children: [
-              Expanded(
-                child: SingleChildScrollView(
+              Center(
+                child: AspectRatio(
+                  aspectRatio: _cameraController!.value.aspectRatio,
+                  child: CameraPreview(_cameraController!),
+                ),
+              ),
+
+              CustomPaint(
+                size: Size.infinite,
+                painter: CameraGridPainter(
+                  color: Colors.white.withOpacity(0.3),
+                ),
+              ),
+
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
                   padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [
+                        Colors.black.withOpacity(0.8),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (_imageFile == null)
-                        _buildChoiceButtons(isDark)
-                      else
-                        _buildImagePreview(isDark),
-                      const SizedBox(height: 24),
-                      if (_isAnalyzing) _buildAnalyzing(isDark),
-                      if (_analysisResult != null) _buildResults(isDark),
+                      const Icon(
+                        Icons.lightbulb_outline,
+                        color: Colors.white70,
+                        size: 28,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Gardez une vue dégagée du frigo',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'La caméra capture automatiquement\ndes photos toutes les ${widget.autoCaptureService?.captureInterval ?? 3}s',
+                        style: TextStyle(color: Colors.white70, fontSize: 14),
+                        textAlign: TextAlign.center,
+                      ),
                     ],
                   ),
                 ),
               ),
             ],
           ),
-        );
-      },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildManualView(bool isDark) {
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_imageFile == null)
+                  _buildChoiceButtons(isDark)
+                else
+                  _buildImagePreview(isDark),
+                const SizedBox(height: 24),
+                if (_isAnalyzing) _buildAnalyzing(isDark),
+                if (_analysisResult != null) _buildResults(isDark),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -847,4 +1102,42 @@ class _VisionScanPageState extends State<VisionScanPage> {
       ),
     );
   }
+}
+
+class CameraGridPainter extends CustomPainter {
+  final Color color;
+
+  CameraGridPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+
+    canvas.drawLine(
+      Offset(size.width / 3, 0),
+      Offset(size.width / 3, size.height),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(2 * size.width / 3, 0),
+      Offset(2 * size.width / 3, size.height),
+      paint,
+    );
+
+    canvas.drawLine(
+      Offset(0, size.height / 3),
+      Offset(size.width, size.height / 3),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(0, 2 * size.height / 3),
+      Offset(size.width, 2 * size.height / 3),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

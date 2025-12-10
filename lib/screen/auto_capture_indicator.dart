@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:kiosque_samsung_ultra/service/auto_capture_orchestrator.dart';
+import 'package:kiosque_samsung_ultra/screen/auto_capture_orchestrator.dart';
 
 class AutoCaptureIndicator extends StatelessWidget {
   final AutoCaptureOrchestrator orchestrator;

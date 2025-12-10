@@ -64,7 +64,6 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
       ),
       body: Column(
         children: [
-          // Bannière d'avertissement si matching incertain
           if (requiresReview)
             Container(
               width: double.infinity,
@@ -99,7 +98,6 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
                   ),
           ),
 
-          // Bouton de validation
           _buildBottomBar(isDark),
         ],
       ),
@@ -124,7 +122,6 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header : Produit détecté
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -174,7 +171,6 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
                     ],
                   ),
                 ),
-                // Badge de score
                 if (matchScore != null)
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -198,7 +194,6 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
                     ),
                   ),
                 const SizedBox(width: 8),
-                // Bouton supprimer
                 IconButton(
                   onPressed: () => _removeItem(index),
                   icon: const Icon(Icons.close),
@@ -216,7 +211,6 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Sélection du produit correspondant
                 Text(
                   'Produit correspondant:',
                   style: TextStyle(
@@ -231,10 +225,7 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
                   _buildMatchedProductTile(item, isDark)
                 else
                   _buildManualSelection(item, index, isDark),
-
                 const SizedBox(height: 16),
-
-                // Quantité à consommer
                 _buildQuantitySelector(item, index, isDark),
               ],
             ),
@@ -515,29 +506,22 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
             item['selected_item_id'] = selectedId;
             item['matched_product_name'] = selectedName;
             item['available_quantity'] = selectedQty;
-            item['match_score'] = 100.0; // Match manuel = 100%
+            item['match_score'] = 100.0;
 
-            // 🎯 Ajustement automatique de la quantité
             final detectedCount = (item['detected_count'] as num).toDouble();
             final availableQty = selectedQty;
 
-            // Si la quantité détectée dépasse le stock disponible,
-            // on ajuste à la quantité maximale disponible
             if (detectedCount > availableQty) {
               item['quantity_to_consume'] = availableQty;
 
-              // Notification à l'utilisateur
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text(
-                    '⚠️ Quantité ajustée à $availableQty (stock max)',
-                  ),
+                  content: Text('Quantité ajustée à $availableQty (stock max)'),
                   backgroundColor: const Color(0xFFF59E0B),
                   duration: const Duration(seconds: 3),
                 ),
               );
             } else {
-              // Sinon, on garde la quantité détectée
               item['quantity_to_consume'] = detectedCount;
             }
           });
@@ -654,15 +638,15 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
       if (failedCount == 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('✅ $successCount produit(s) retirés avec succès'),
+            content: Text('$successCount produit(s) retirés avec succès'),
             backgroundColor: Colors.green,
           ),
         );
-        Navigator.pop(context, true); // Retour avec succès
+        Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('⚠️ $successCount réussis, $failedCount échoués'),
+            content: Text('$successCount réussis, $failedCount échoués'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -670,7 +654,7 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('❌ Erreur: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
         );
       }
     } finally {
@@ -681,7 +665,6 @@ class _ConsumptionReviewPageState extends State<ConsumptionReviewPage> {
   }
 }
 
-// Widget pour sélection manuelle des alternatives
 class _AlternativesSheet extends StatefulWidget {
   final int fridgeId;
   final Map<String, dynamic> item;
